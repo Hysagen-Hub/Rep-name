@@ -1,0 +1,1477 @@
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local GuiService = game:GetService("GuiService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local camera = Workspace.CurrentCamera
+
+-- Получаем RemoteEvent и RemoteFunction для атак
+local RE = character:WaitForChild("RemoteEvent")
+local RF = character:WaitForChild("RemoteFunction")
+
+local ScriptActive = false
+local farmingCoroutine = nil
+local isAttacking = false
+local attackThread = nil
+local standFarmMode = false
+local currentTarget = nil
+local heartbeatConnection = nil
+local statusText = nil
+
+local unwantedStands = {
+    ["Six Pistols"] = true,
+    ["Mr. President"] = true,
+    ["Hermit Purple"] = true,
+    ["Anubis"] = true,
+    ["Aerosmith"] = true,
+    ["White Album"] = true,
+    ["Beach Boy"] = true
+}
+
+local skills = {
+    {Skill = "Agility I", SkillTreeType = "Character"},
+    {Skill = "Agility II", SkillTreeType = "Character"},
+    {Skill = "Agility III", SkillTreeType = "Character"},
+    {Skill = "Worthiness", SkillTreeType = "Character"}
+}
+
+-- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+local function getCharacter()
+    local char = player.Character or player.CharacterAdded:Wait()
+    local root = char:WaitForChild("HumanoidRootPart")
+    return char, root
+end
+
+local function travelTo(targetPosition)
+    if not rootPart or not rootPart.Parent then return false end
+    
+    local startPosition = rootPart.Position
+    local direction = (targetPosition - startPosition)
+    local distance = direction.Magnitude
+    local chunkSize = 50
+    local numChunks = math.max(1, math.ceil(distance / chunkSize))
+    local stepVector = direction / numChunks
+    
+    for i = 1, numChunks do
+        if not ScriptActive or not rootPart or not rootPart.Parent then
+            return false
+        end
+        local newPosition = rootPart.Position + stepVector
+        rootPart.CFrame = CFrame.new(newPosition)
+        task.wait(0.05)
+    end
+    
+    rootPart.CFrame = CFrame.new(targetPosition)
+    task.wait(0.05)
+    return true
+end
+
+local function findAliveNPC(targetName)
+    local liv = Workspace:FindFirstChild("Living")
+    if not liv then return nil end
+    
+    for _, npc in pairs(liv:GetChildren()) do
+        if npc.Name == targetName then
+            local hrp = npc:FindFirstChild("HumanoidRootPart")
+            local healthValue = npc:FindFirstChild("Health")
+            
+            if hrp and healthValue and healthValue.Value > 0 then
+                return npc
+            end
+        end
+    end
+    return nil
+end
+
+local function getPrestige()
+    local prestige = game:GetService("Players").LocalPlayer.PlayerStats.Prestige.Value
+    return prestige
+end
+
+local function learnSkills()
+    local char, _ = getCharacter()
+    local RF_local = char:WaitForChild("RemoteFunction")
+    for _, data in ipairs(skills) do
+        pcall(function() RF_local:InvokeServer("LearnSkill", data) end)
+    end
+end
+
+local function triggerProximityPrompt(prompt)
+    if not prompt or not prompt.Parent then return false end
+    
+    local originalHoldDuration = prompt.HoldDuration
+    local originalRequiresLineOfSight = prompt.RequiresLineOfSight
+    
+    prompt.HoldDuration = 0
+    prompt.RequiresLineOfSight = false
+    
+    local success = pcall(function()
+        fireproximityprompt(prompt)
+    end)
+    
+    task.wait(0.1)
+    prompt.HoldDuration = originalHoldDuration
+    prompt.RequiresLineOfSight = originalRequiresLineOfSight
+    
+    return success
+end
+
+local function clickScreenCenter()
+    local screenSize = camera.ViewportSize
+    local centerX = screenSize.X / 2
+    local centerY = screenSize.Y / 2
+    
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.spawn(function()
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+    end)
+end
+
+local function clickGuiButton(button)
+    if not button or not button.Visible then return false end
+    local inset = GuiService:GetGuiInset()
+    local centerX = button.AbsolutePosition.X + (button.AbsoluteSize.X / 2) + inset.X
+    local heightOffset = button.AbsoluteSize.Y * 1.4
+    local centerY = button.AbsolutePosition.Y + (button.AbsoluteSize.Y / 2) + inset.Y - heightOffset
+    
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.spawn(function()
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+    end)
+    return true
+end
+
+local function findDialogueOptionButton(dialogueGui)
+    local options = dialogueGui:FindFirstChild("Options")
+    if options then
+        local option1 = options:FindFirstChild("Option1")
+        if option1 then
+            local button = option1:FindFirstChildWhichIsA("GuiButton")
+            if button and button.Visible then return button end
+        end
+    end
+    for _, child in pairs(dialogueGui:GetDescendants()) do
+        if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Visible and child.Active then
+            return child
+        end
+    end
+    return nil
+end
+
+local function equipItem(itemName)
+    local backpack = player:WaitForChild("Backpack")
+    local item = backpack:FindFirstChild(itemName)
+    
+    if item then
+        local char, _ = getCharacter()
+        item.Parent = char
+        return true
+    end
+    return false
+end
+
+local function farmItem(itemName)
+    while task.wait(0.5) and ScriptActive do
+        local hasItem = player.Backpack:FindFirstChild(itemName) or (player.Character and player.Character:FindFirstChild(itemName))
+        if hasItem then
+            return true
+        end
+
+        local itemsFolder = Workspace:FindFirstChild("Item_Spawns")
+        if itemsFolder then itemsFolder = itemsFolder:FindFirstChild("Items") end
+        
+        if itemsFolder then
+            for _, model in ipairs(itemsFolder:GetDescendants()) do
+                if (model:IsA("Model") or model:IsA("BasePart")) and not model:IsA("Tool") then
+                    local prompt = model:FindFirstChildOfClass("ProximityPrompt")
+                    if prompt and prompt.ObjectText == itemName then
+                        local part = model.PrimaryPart or model:FindFirstChildOfClass("BasePart") or model
+                        if part:IsA("BasePart") then
+                            local targetPos = part.Position + Vector3.new(0, 2, 0)
+                            if travelTo(targetPos) then
+                                task.wait(0.2)
+                                triggerProximityPrompt(prompt)
+                                task.wait(1)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function useItem(itemName)
+    if not equipItem(itemName) then return false end
+    task.wait(0.5)
+
+    local playerGui = player:WaitForChild("PlayerGui")
+    local dialogueGui = nil
+    while not dialogueGui and ScriptActive do
+        clickScreenCenter()
+        dialogueGui = playerGui:FindFirstChild("DialogueGui")
+        if not dialogueGui then
+            for _, gui in pairs(playerGui:GetChildren()) do
+                if gui.Name:lower():find("dialogue") then
+                    dialogueGui = gui
+                    break
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+
+    local targetButton = nil
+    while not targetButton and ScriptActive do
+        targetButton = findDialogueOptionButton(dialogueGui)
+        if targetButton then
+            clickGuiButton(targetButton)
+            task.wait(0.1)
+            clickGuiButton(targetButton)
+            break
+        end
+        task.wait(0.5)
+    end
+
+    while dialogueGui and dialogueGui.Parent == playerGui and ScriptActive do
+        targetButton = findDialogueOptionButton(dialogueGui)
+        if targetButton then
+            clickGuiButton(targetButton)
+        end
+        task.wait(0.5)
+    end
+
+    task.wait(5)
+end
+
+-- ========== ФУНКЦИИ АТАКИ ==========
+
+local function startAttack()
+    if isAttacking then return end
+    isAttacking = true
+    
+    attackThread = task.spawn(function()
+        local attackTable = {Bool = true, Type = "m1"}
+        while isAttacking and ScriptActive do
+            RE:FireServer("HoldAttack", attackTable)
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopAttack()
+    if not isAttacking then return end
+    isAttacking = false
+    
+    if attackThread then
+        task.cancel(attackThread)
+        attackThread = nil
+    end
+    
+    local attackTable = {Bool = false, Type = "m1"}
+    RE:FireServer("HoldAttack", attackTable)
+end
+
+-- ========== ФУНКЦИИ СТЕНДА ==========
+
+local function toggleStand()
+    -- Выключаем атаку перед призывом стенда
+    stopAttack()
+    task.wait(0.2)
+    
+    pcall(function()
+        RF:InvokeServer("ToggleStand", "Toggle")
+    end)
+    
+    task.wait(0.5)
+end
+
+local function hasStand()
+    local stats = player:FindFirstChild("PlayerStats")
+    if stats and stats:FindFirstChild("Stand") then
+        return stats.Stand.Value ~= "None"
+    end
+    return false
+end
+
+local function getStandMorph()
+    if character then
+        return character:FindFirstChild("StandMorph")
+    end
+    return nil
+end
+
+-- Прикрепление стенда к NPC (только позиция, без постоянного обновления)
+local function attachStandToTarget(target)
+    local standMorph = getStandMorph()
+    if not standMorph or not target then return end
+    
+    local targetRoot = target:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+    
+    -- Устанавливаем позицию стенда за спиной NPC на 3 студия
+    local standPosition = targetRoot.Position - targetRoot.CFrame.LookVector * 3
+    local standCFrame = CFrame.new(standPosition)
+    
+    standMorph:SetPrimaryPartCFrame(standCFrame)
+end
+
+local function updateStatus(msg)
+    print("[Mista]", msg)
+    if statusText then
+        statusText.Text = msg
+    end
+end
+
+local function updatePlayerPositionBehind(npc, distance)
+    if not npc or not npc.Parent then return false end
+    
+    local targetRoot = npc:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return false end
+    
+    if not rootPart or not rootPart.Parent then return false end
+    
+    -- Вычисляем позицию за спиной NPC
+    local behindPosition = targetRoot.Position - targetRoot.CFrame.LookVector * distance
+    
+    -- Устанавливаем позицию игрока
+    rootPart.CFrame = CFrame.new(behindPosition)
+    -- Поворачиваем лицом к NPC
+    rootPart.CFrame = CFrame.lookAt(rootPart.Position, targetRoot.Position)
+    
+    return true
+end
+
+-- Функция для обновления позиции игрока выше головы NPC
+local function updatePlayerPositionAbove(npc, height)
+    if not npc or not npc.Parent then return false end
+    
+    local targetHead = npc:FindFirstChild("Head")
+    if not targetHead then return false end
+    
+    if not rootPart or not rootPart.Parent then return false end
+    
+    -- Вычисляем позицию выше головы
+    local abovePosition = targetHead.Position + Vector3.new(0, height, 0)
+    
+    -- Устанавливаем позицию игрока
+    rootPart.CFrame = CFrame.new(abovePosition)
+    
+    return true
+end
+
+local function stopHeartbeat()
+    if heartbeatConnection then
+        heartbeatConnection:Disconnect()
+        heartbeatConnection = nil
+    end
+end
+
+local function stopStandFarm()
+    standFarmMode = false
+    currentTarget = nil
+    stopHeartbeat()
+    stopAttack()
+end
+
+-- ========== ФУНКЦИИ ФАРМА ==========
+
+-- Обычный фарм (без стенда) - игрок за спиной NPC на 4 студия
+local function killLogicNormal(npc)
+    if not npc or not npc.Parent then return false end
+    
+    -- Останавливаем старый heartbeat если есть
+    stopHeartbeat()
+    
+    -- Включаем атаку
+    startAttack()
+    
+    -- Запускаем постоянное обновление позиции
+    heartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not ScriptActive or standFarmMode or not npc or not npc.Parent then
+            return
+        end
+        
+        -- Проверяем жив ли игрок
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            return
+        end
+        
+        updatePlayerPositionBehind(npc, 4)
+    end)
+    
+    local startTime = tick()
+    local npcDied = false
+    
+    while ScriptActive and not standFarmMode and npc and npc.Parent do
+        local currentHealth = npc:FindFirstChild("Health")
+        if not currentHealth or currentHealth.Value <= 0 then
+            npcDied = true
+            break
+        end
+        
+        -- Проверяем жив ли игрок
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            break
+        end
+        
+        task.wait(0.1)
+        
+        if tick() - startTime > 30 then
+            break
+        end
+    end
+    
+    -- Останавливаем обновление позиции и атаку
+    stopHeartbeat()
+    stopAttack()
+    task.wait(0.2)
+    
+    return npcDied
+end
+
+-- Фарм со стендом - игрок выше головы NPC на 16 студий, стенд сзади
+local function killLogicWithStand(npc)
+    if not npc or not npc.Parent then return false end
+    
+    local targetRoot = npc:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return false end
+    
+    if statusText then
+        statusText.Text = "⚔️ Attacking " .. npc.Name .. " with stand..."
+    end
+    
+    -- Останавливаем старый heartbeat если есть
+    stopHeartbeat()
+    
+    -- Включаем атаку
+    startAttack()
+    
+    -- Прикрепляем стенд 1 раз в начальную позицию
+    local standMorph = getStandMorph()
+    if standMorph then
+        local standPosition = targetRoot.Position
+        standMorph:SetPrimaryPartCFrame(CFrame.new(standPosition))
+    end
+    
+    -- Запускаем постоянное обновление позиции игрока и стенда
+    heartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not ScriptActive or not standFarmMode or not npc or not npc.Parent then
+            return
+        end
+        
+        -- Проверяем жив ли игрок
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            return
+        end
+        
+        -- Обновляем позицию игрока выше головы NPC
+        local targetHead = npc:FindFirstChild("Head")
+        if targetHead then
+            local abovePosition = targetHead.Position + Vector3.new(0, 16, 0)
+            rootPart.CFrame = CFrame.new(abovePosition)
+        end
+        
+        -- Обновляем позицию стенда за спиной NPC
+        local currentStand = getStandMorph()
+        if currentStand and npc and npc.Parent then
+            local currentTargetRoot = npc:FindFirstChild("HumanoidRootPart")
+            if currentTargetRoot then
+                local standPosition = currentTargetRoot.Position - currentTargetRoot.CFrame.LookVector * 3
+                currentStand:SetPrimaryPartCFrame(CFrame.new(standPosition))
+            end
+        end
+    end)
+    
+    local startTime = tick()
+    local npcDied = false
+    local lastHealth = nil
+    
+    while ScriptActive and standFarmMode and npc and npc.Parent do
+        local currentHealth = npc:FindFirstChild("Health")
+        if not currentHealth or currentHealth.Value <= 0 then
+            npcDied = true
+            if statusText then
+                statusText.Text = "💀 " .. npc.Name .. " defeated!"
+            end
+            break
+        end
+        
+        -- Показываем здоровье раз в секунду
+        if lastHealth ~= currentHealth.Value and tick() % 1 < 0.1 then
+            lastHealth = currentHealth.Value
+            if statusText then
+                statusText.Text = "❤️ " .. npc.Name .. " HP: " .. lastHealth
+            end
+        end
+        
+        -- Проверяем жив ли игрок
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            if statusText then
+                statusText.Text = "💀 Player died during combat!"
+            end
+            break
+        end
+        
+        -- Проверяем, не пропал ли стенд (раз в 2 секунды)
+        if tick() % 2 < 0.1 then
+            if not hasStand() then
+                if statusText then
+                    statusText.Text = "⚠️ Stand lost during combat, resummoning..."
+                end
+                toggleStand()
+                task.wait(1)
+                if hasStand() then
+                    -- Обновляем позицию стенда
+                    local currentTargetRoot = npc:FindFirstChild("HumanoidRootPart")
+                    if currentTargetRoot then
+                        local newStand = getStandMorph()
+                        if newStand then
+                            local standPosition = currentTargetRoot.Position - currentTargetRoot.CFrame.LookVector * 3
+                            newStand:SetPrimaryPartCFrame(CFrame.new(standPosition))
+                        end
+                    end
+                end
+            end
+        end
+        
+        task.wait(0.2)
+        
+        -- Таймаут 60 секунд
+        if tick() - startTime > 60 then
+            if statusText then
+                statusText.Text = "⏰ Combat timeout for " .. npc.Name
+            end
+            break
+        end
+    end
+    
+    -- Останавливаем обновление позиции и атаку
+    stopHeartbeat()
+    stopAttack()
+    task.wait(0.2)
+    
+    return npcDied
+end
+
+local function farmNPCs(npcName, neededCount)
+    if not ScriptActive then return end
+    
+    local killedCount = 0
+    if statusText then
+        statusText.Text = "⚔️ Farming " .. npcName .. ": 0/" .. neededCount
+    end
+    
+    while killedCount < neededCount and ScriptActive and not standFarmMode do
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            if statusText then
+                statusText.Text = "💀 Ожидание респавна..."
+            end
+            character = player.CharacterAdded:Wait()
+            rootPart = character:WaitForChild("HumanoidRootPart")
+            RE = character:WaitForChild("RemoteEvent")
+            RF = character:WaitForChild("RemoteFunction")
+            
+            if ScriptActive then
+                stopAttack()
+                task.wait(1)
+            end
+            task.wait(2)
+        end
+        
+        local target = findAliveNPC(npcName)
+        
+        if target then
+            travelTo(target.HumanoidRootPart.Position)
+            task.wait(0.3)
+            
+            if not ScriptActive then break end
+            
+            local npcDied = killLogicNormal(target)
+            
+            if npcDied then
+                killedCount = killedCount + 1
+                if statusText then
+                    statusText.Text = "⚔️ Farming " .. npcName .. ": " .. killedCount .. "/" .. neededCount
+                end
+            end
+            task.wait(0.5)
+        else
+            if statusText then
+                statusText.Text = "⏳ Ожидание спавна: " .. npcName
+            end
+            task.wait(3)
+        end
+    end
+end
+
+-- ЗАМЕНЁННАЯ ФУНКЦИЯ farmWithStand
+local function farmWithStand(npcName, neededCount)
+    if not ScriptActive then return end
+    
+    local killedCount = 0
+    standFarmMode = true
+    if statusText then
+        statusText.Text = "🤖 Stand farm " .. npcName .. ": 0/" .. neededCount
+    end
+    
+    -- Бесконечные попытки призыва стенда
+    local standMorph = nil
+    local summonAttempts = 0
+    
+    while not standMorph and ScriptActive and standFarmMode do
+        summonAttempts = summonAttempts + 1
+        if statusText then
+            statusText.Text = "🔄 Summoning stand (attempt " .. summonAttempts .. ")..."
+        end
+        
+        -- Призываем стенд (атака выключается внутри toggleStand)
+        toggleStand()
+        task.wait(2)
+        
+        -- Проверяем, появился ли стенд
+        standMorph = getStandMorph()
+        
+        if not standMorph then
+            if statusText then
+                statusText.Text = "⚠️ Failed to summon stand, retrying..."
+            end
+            task.wait(1)
+        end
+    end
+    
+    if not standMorph then
+        if statusText then
+            statusText.Text = "❌ Cannot summon stand at all, stopping..."
+        end
+        standFarmMode = false
+        return
+    end
+    
+    if statusText then
+        statusText.Text = "✅ Stand summoned successfully!"
+    end
+    
+    -- Убеждаемся что атака включена
+    if not isAttacking then
+        startAttack()
+    end
+    
+    while killedCount < neededCount and ScriptActive and standFarmMode do
+        -- Проверяем наличие стенда
+        if not hasStand() then
+            if statusText then
+                statusText.Text = "🔄 Stand lost, resummoning..."
+            end
+            
+            -- Бесконечные попытки восстановить стенд
+            local resummonAttempts = 0
+            local resummonSuccess = false
+            
+            while not resummonSuccess and ScriptActive and standFarmMode do
+                resummonAttempts = resummonAttempts + 1
+                if statusText then
+                    statusText.Text = "🔄 Resummoning stand (attempt " .. resummonAttempts .. ")..."
+                end
+                
+                toggleStand()
+                task.wait(2)
+                
+                if hasStand() then
+                    resummonSuccess = true
+                    standMorph = getStandMorph()
+                    if statusText then
+                        statusText.Text = "✅ Stand resummoned successfully!"
+                    end
+                else
+                    if statusText then
+                        statusText.Text = "⚠️ Failed to resummon, retrying..."
+                    end
+                    task.wait(1)
+                end
+            end
+            
+            if not resummonSuccess then
+                if statusText then
+                    statusText.Text = "❌ Cannot resummon stand, stopping..."
+                end
+                standFarmMode = false
+                break
+            end
+        end
+        
+        -- Проверяем жив ли игрок
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            if statusText then
+                statusText.Text = "💀 Waiting for respawn..."
+            end
+            character = player.CharacterAdded:Wait()
+            rootPart = character:WaitForChild("HumanoidRootPart")
+            RE = character:WaitForChild("RemoteEvent")
+            RF = character:WaitForChild("RemoteFunction")
+            
+            if ScriptActive and standFarmMode then
+                stopAttack()
+                task.wait(0.3)
+                
+                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
+                local respawnSummonAttempts = 0
+                local respawnSummonSuccess = false
+                
+                while not respawnSummonSuccess and ScriptActive and standFarmMode do
+                    respawnSummonAttempts = respawnSummonAttempts + 1
+                    if statusText then
+                        statusText.Text = "🔄 Summoning stand after respawn (attempt " .. respawnSummonAttempts .. ")..."
+                    end
+                    
+                    toggleStand()
+                    task.wait(2)
+                    
+                    if hasStand() then
+                        respawnSummonSuccess = true
+                        standMorph = getStandMorph()
+                        if statusText then
+                            statusText.Text = "✅ Stand summoned after respawn!"
+                        end
+                    else
+                        if statusText then
+                            statusText.Text = "⚠️ Failed to summon after respawn, retrying..."
+                        end
+                        task.wait(1)
+                    end
+                end
+                
+                if not respawnSummonSuccess then
+                    if statusText then
+                        statusText.Text = "❌ Cannot summon stand after respawn, stopping..."
+                    end
+                    standFarmMode = false
+                    break
+                end
+                
+                startAttack()
+                standMorph = getStandMorph()
+            end
+            task.wait(1)
+            continue
+        end
+        
+        -- Ищем NPC
+        local target = findAliveNPC(npcName)
+        
+        if target then
+            currentTarget = target
+            
+            if statusText then
+                statusText.Text = "🎯 Found " .. npcName .. ", engaging..."
+            end
+            
+            -- Идём к NPC
+            local targetRoot = target:FindFirstChild("HumanoidRootPart")
+            if targetRoot then
+                travelTo(targetRoot.Position)
+                task.wait(0.5)
+            end
+            
+            -- Запускаем фарм (атака включается внутри killLogicWithStand)
+            local targetDied = killLogicWithStand(target)
+            
+            if targetDied then
+                killedCount = killedCount + 1
+                if statusText then
+                    statusText.Text = "✅ " .. npcName .. " defeated! (" .. killedCount .. "/" .. neededCount .. ")"
+                end
+            else
+                if statusText then
+                    statusText.Text = "⚠️ Failed to defeat " .. npcName .. ", retrying..."
+                end
+            end
+            
+            task.wait(1)
+        else
+            if statusText then
+                statusText.Text = "⏳ Waiting for " .. npcName .. " to spawn..."
+            end
+            task.wait(3)
+        end
+    end
+    
+    stopStandFarm()
+    
+    if killedCount >= neededCount and statusText then
+        statusText.Text = "✅ Stand farm completed: " .. npcName
+    end
+end
+
+local function takeQuest(npcName, questValue)
+    if not ScriptActive then return false end
+    
+    -- Выключаем атаку перед диалогом
+    stopAttack()
+    task.wait(0.2)
+    
+    if statusText then
+        statusText.Text = "📜 Quest: " .. npcName
+    end
+    print("📜 Quest:", npcName, questValue)
+    
+    local dialogueData = {
+        DialogueName = questValue,
+        Speaker = npcName
+    }
+    
+    RE:FireServer('DialogueInteracted', dialogueData)
+    
+    task.wait(1)
+    
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local maxAttempts = 30
+    
+    for attempt = 1, maxAttempts do
+        local playerGui = player:FindFirstChild("PlayerGui")
+        if playerGui then
+            local dialogue = playerGui:FindFirstChild("Dialogue")
+            if dialogue and dialogue.Enabled then
+                for _, btn in ipairs(dialogue:GetDescendants()) do
+                    if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible and btn.Active then
+                        local centerX = btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2
+                        local centerY = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
+                        
+                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+                        task.wait(0.05)
+                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+                        task.wait(0.3)
+                        break
+                    end
+                end
+            else
+                if statusText then
+                    statusText.Text = "✅ Quest taken: " .. npcName
+                end
+                print("✅ Quest taken:", npcName)
+                return true
+            end
+        end
+        task.wait(0.3)
+    end
+    
+    if statusText then
+        statusText.Text = "⚠️ Quest timeout: " .. npcName
+    end
+    return true
+end
+
+local function mistaQuest()
+    if not ScriptActive then return false end
+    
+    -- Выключаем атаку перед диалогом
+    stopAttack()
+    task.wait(0.2)
+    
+    if statusText then
+        statusText.Text = "📜 Starting Mista quest..."
+    end
+    
+    -- Открываем диалог с Мистой
+    local dialogueData = {
+        DialogueName = "Storyline #7",
+        Speaker = "Mista"
+    }
+    
+    RE:FireServer('DialogueInteracted', dialogueData)
+    task.wait(1)
+    
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local playerGui = player:WaitForChild("PlayerGui")
+    
+    -- Ждём появления диалогового окна
+    local dialogueGui = nil
+    local maxWait = 20
+    local waitCount = 0
+    
+    while not dialogueGui and waitCount < maxWait and ScriptActive do
+        for _, gui in pairs(playerGui:GetChildren()) do
+            if gui.Name:lower():find("dialogue") then
+                dialogueGui = gui
+                break
+            end
+        end
+        task.wait(0.5)
+        waitCount = waitCount + 1
+    end
+    
+    if not dialogueGui then
+        if statusText then
+            statusText.Text = "⚠️ Mista dialogue not found!"
+        end
+        return false
+    end
+    
+    -- Функция для нажатия на кнопку
+    local function clickButton(button)
+        if not button or not button.Visible then return false end
+        local inset = GuiService:GetGuiInset()
+        local centerX = button.AbsolutePosition.X + (button.AbsoluteSize.X / 2) + inset.X
+        local centerY = button.AbsolutePosition.Y + (button.AbsoluteSize.Y / 2) + inset.Y
+        
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+        return true
+    end
+    
+    -- Функция для нажатия на левую стрелку
+    local function clickLeftArrow()
+        for _, child in pairs(dialogueGui:GetDescendants()) do
+            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
+                local name = child.Name:lower()
+                local text = child.Text and child.Text:lower() or ""
+                if name:find("left") or name:find("arrow") or text:find("<") or text:find("←") then
+                    updateStatus("👉 Clicking LEFT")
+                    return clickButton(child)
+                end
+            end
+        end
+        
+        local leftmostButton = nil
+        local leftmostX = math.huge
+        
+        for _, child in pairs(dialogueGui:GetDescendants()) do
+            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
+                local x = child.AbsolutePosition.X
+                if x < leftmostX then
+                    leftmostX = x
+                    leftmostButton = child
+                end
+            end
+        end
+        
+        if leftmostButton then
+            updateStatus("👉 Clicking LEFTMOST")
+            return clickButton(leftmostButton)
+        end
+        
+        return false
+    end
+    
+    -- Функция для нажатия на правую стрелку
+    local function clickRightArrow()
+        for _, child in pairs(dialogueGui:GetDescendants()) do
+            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
+                local name = child.Name:lower()
+                local text = child.Text and child.Text:lower() or ""
+                if name:find("right") or name:find("arrow") or text:find(">") or text:find("→") then
+                    updateStatus("👉 Clicking RIGHT")
+                    return clickButton(child)
+                end
+            end
+        end
+        
+        local rightmostButton = nil
+        local rightmostX = -math.huge
+        
+        for _, child in pairs(dialogueGui:GetDescendants()) do
+            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
+                local x = child.AbsolutePosition.X
+                if x > rightmostX then
+                    rightmostX = x
+                    rightmostButton = child
+                end
+            end
+        end
+        
+        if rightmostButton then
+            updateStatus("👉 Clicking RIGHTMOST")
+            return clickButton(rightmostButton)
+        end
+        
+        return false
+    end
+    
+    -- Функция для получения Option2 TextButton
+    local function getOption2TextButton()
+        local options = dialogueGui:FindFirstChild("Options")
+        if options then
+            local option2 = options:FindFirstChild("Option2")
+            if option2 then
+                return option2:FindFirstChildWhichIsA("TextButton")
+            end
+        end
+        return nil
+    end
+    
+    -- Функция для получения основного текста диалога
+    local function getDialogueText()
+        local interact = dialogueGui:FindFirstChild("Interact")
+        if interact then
+            local frame = interact:FindFirstChild("Frame")
+            if frame then
+                return frame:FindFirstChildWhichIsA("TextLabel")
+            end
+        end
+        return nil
+    end
+    
+    -- Функция для отслеживания стабильности текста
+    local function waitForBothTextsStable(stableTimeNeeded, maxWait)
+        stableTimeNeeded = stableTimeNeeded or 3
+        maxWait = maxWait or 15
+        
+        local dialogueText = getDialogueText()
+        local option2Text = getOption2TextButton()
+        
+        if not dialogueText and not option2Text then
+            updateStatus("⚠️ No text elements found!")
+            return false
+        end
+        
+        local lastDialogueText = dialogueText and dialogueText.Text or ""
+        local lastOption2Text = option2Text and option2Text.Text or ""
+        local stableTime = 0
+        local startTime = tick()
+        
+        updateStatus("🔍 Waiting for texts to stabilize (" .. stableTimeNeeded .. "s)...")
+        
+        while stableTime < stableTimeNeeded and tick() - startTime < maxWait and ScriptActive do
+            task.wait(0.2)
+            
+            local currentDialogue = dialogueText and dialogueText.Text or ""
+            local currentOption2 = option2Text and option2Text.Text or ""
+            
+            if currentDialogue ~= lastDialogueText or currentOption2 ~= lastOption2Text then
+                stableTime = 0
+            else
+                stableTime = stableTime + 0.2
+            end
+            
+            lastDialogueText = currentDialogue
+            lastOption2Text = currentOption2
+        end
+        
+        if stableTime >= stableTimeNeeded then
+            updateStatus("✅ Texts stable for " .. stableTimeNeeded .. " seconds!")
+            return true
+        end
+        
+        updateStatus("⚠️ Timeout waiting for text stability")
+        return false
+    end
+    
+    -- ========== ОСНОВНАЯ ЛОГИКА ==========
+    updateStatus("📜 Starting Mista quest...")
+    
+    local clickSequence = {"left", "left", "right"}
+    local step = 1
+    
+    while ScriptActive and dialogueGui and dialogueGui.Parent == playerGui do
+        updateStatus("Step " .. step .. " of sequence - waiting for texts to stabilize...")
+        
+        -- Ждём стабильности текста 3 секунды
+        local isStable = waitForBothTextsStable(3, 15)
+        
+        if not isStable then
+            updateStatus("⚠️ Timeout, breaking...")
+            break
+        end
+        
+        if step <= #clickSequence then
+            -- Выполняем последовательность: лево, лево, право
+            local direction = clickSequence[step]
+            if direction == "left" then
+                updateStatus("STEP " .. step .. ": Clicking LEFT")
+                clickLeftArrow()
+            elseif direction == "right" then
+                updateStatus("STEP " .. step .. ": Clicking RIGHT")
+                clickRightArrow()
+            end
+            task.wait(1)
+            step = step + 1
+        else
+            -- После последовательности кликаем налево до конца
+            updateStatus("Sequence complete! Clicking LEFT until dialogue ends...")
+            local clickCount = 0
+            while dialogueGui and dialogueGui.Parent == playerGui and ScriptActive do
+                clickLeftArrow()
+                clickCount = clickCount + 1
+                task.wait(0.5)
+            end
+            updateStatus("✅ Dialogue closed after " .. clickCount .. " left clicks!")
+            break
+        end
+    end
+    
+    if statusText then
+        statusText.Text = "✅ Mista quest completed!"
+    end
+    
+    updateStatus("✅ Mista quest finished!")
+    task.wait(1)
+    return true
+end
+
+-- ЗАМЕНЁННАЯ ФУНКЦИЯ startStandFarming
+local function startStandFarming()
+    while ScriptActive do
+        local stats = player:FindFirstChild("PlayerStats")
+        if not stats then task.wait(2) continue end
+        
+        local standVal = stats:FindFirstChild("Stand")
+        if not standVal then task.wait(2) continue end
+        
+        local currentStand = standVal.Value
+
+        if currentStand ~= "None" then
+            if unwantedStands[currentStand] then
+                if statusText then
+                    statusText.Text = "🔄 Bad stand, resetting..."
+                end
+                local hasRoka = player.Backpack:FindFirstChild("Rokakaka") or (player.Character and player.Character:FindFirstChild("Rokakaka"))
+                
+                if not hasRoka then
+                    farmItem("Rokakaka")
+                end
+                useItem("Rokakaka")
+                
+                local elapsed = 0
+                while standVal.Value ~= "None" and elapsed < 20 and ScriptActive do
+                    task.wait(1)
+                    elapsed = elapsed + 1
+                end
+                task.wait(4)
+            else
+                if statusText then
+                    statusText.Text = "✅ Good stand: " .. currentStand
+                end
+                toggleStand()
+                
+                -- РЕСЕТ ПЕРСОНАЖА ПОСЛЕ ПОЛУЧЕНИЯ ХОРОШЕГО СТЕНДА
+                if statusText then
+                    statusText.Text = "🔄 Resetting character to fix stand summon..."
+                end
+                
+                -- Убиваем персонажа
+                local humanoid = character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.Health = 0
+                end
+                stopAttack()
+                
+                -- Ждём респавна
+                character = player.CharacterAdded:Wait()
+                rootPart = character:WaitForChild("HumanoidRootPart")
+                RE = character:WaitForChild("RemoteEvent")
+                RF = character:WaitForChild("RemoteFunction")
+                
+                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
+                local respawnAttempts = 0
+                local respawnSuccess = false
+                
+                while not respawnSuccess and ScriptActive do
+                    respawnAttempts = respawnAttempts + 1
+                    if statusText then
+                        statusText.Text = "🔄 Summoning stand after respawn (attempt " .. respawnAttempts .. ")..."
+                    end
+                    
+                    toggleStand()
+                    task.wait(2)
+                    
+                    if hasStand() then
+                        respawnSuccess = true
+                        if statusText then
+                            statusText.Text = "✅ Stand summoned successfully after respawn!"
+                        end
+                    else
+                        if statusText then
+                            statusText.Text = "⚠️ Failed to summon after respawn, retrying..."
+                        end
+                        task.wait(1)
+                    end
+                end
+                
+                if not respawnSuccess then
+                    if statusText then
+                        statusText.Text = "❌ Cannot summon stand after respawn, giving up..."
+                    end
+                    return nil
+                end
+                
+                if statusText then
+                    statusText.Text = "✅ Character respawned, ready to use stand!"
+                end
+                
+                -- Возвращаем название стенда
+                return currentStand
+            end
+        else
+            if statusText then
+                statusText.Text = "📚 Learning skills..."
+            end
+            learnSkills()
+            
+            local hasArrow = player.Backpack:FindFirstChild("Mysterious Arrow") or (player.Character and player.Character:FindFirstChild("Mysterious Arrow"))
+            
+            if not hasArrow then
+                if statusText then
+                    statusText.Text = "🏹 Farming arrow..."
+                end
+                farmItem("Mysterious Arrow")
+            end
+            if statusText then
+                statusText.Text = "✨ Using arrow..."
+            end
+            useItem("Mysterious Arrow")
+            
+            local elapsed = 0
+            while standVal.Value == "None" and elapsed < 30 and ScriptActive do
+                task.wait(1)
+                elapsed = elapsed + 1
+            end
+            task.wait(2)
+        end
+        task.wait(2)
+    end
+end
+
+-- ========== ОСНОВНАЯ ЛОГИКА ==========
+
+local function myFarmLogic()
+    local prestige = getPrestige()
+    if prestige == 0 then
+        takeQuest("Giorno", "Storyline #1")
+        farmNPCs("Security Guard", 5)
+        
+        local stand = startStandFarming()
+        
+        if stand and not unwantedStands[stand] then
+            if statusText then
+                statusText.Text = "🎭 Stand mode activated for: " .. stand
+            end
+            
+            takeQuest("Giorno", "Storyline #1")
+            takeQuest("Koichi", "Storyline #2")
+            takeQuest("Giorno", "Storyline #3")
+            
+            farmWithStand("Leaky Eye Luca", 1)
+            
+            takeQuest("Giorno", "Storyline #3")
+            
+            farmWithStand("Bucciarati", 1)
+
+            takeQuest("Bucciarati", "Storyline #4")
+            takeQuest("Giorno", "Storyline #5")
+            takeQuest("Fugo", "Storyline #6")
+
+            mistaQuest()
+        end
+    end
+end
+
+-- ========== СОЗДАНИЕ GUI ==========
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FarmGUI"
+screenGui.Parent = player:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 300, 0, 150)
+mainFrame.Position = UDim2.new(0.5, -150, 0.5, -75)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+mainFrame.BackgroundTransparency = 0.1
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 10)
+titleCorner.Parent = titleBar
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 1, 0)
+title.BackgroundTransparency = 1
+title.Text = "Farm Controller"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Center
+title.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 1, 0)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 18
+closeBtn.Parent = titleBar
+
+closeBtn.MouseButton1Click:Connect(function()
+    if ScriptActive then
+        stopAttack()
+        stopStandFarm()
+    end
+    screenGui:Destroy()
+end)
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, 0, 1, -30)
+content.Position = UDim2.new(0, 0, 0, 30)
+content.BackgroundTransparency = 1
+content.Parent = mainFrame
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 150, 0, 40)
+toggleBtn.Position = UDim2.new(0.5, -75, 0, 20)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+toggleBtn.Text = "▶ START FARM"
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 14
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Parent = content
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 6)
+btnCorner.Parent = toggleBtn
+
+local statusFrame = Instance.new("Frame")
+statusFrame.Size = UDim2.new(1, -20, 0, 40)
+statusFrame.Position = UDim2.new(0, 10, 0, 75)
+statusFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+statusFrame.BackgroundTransparency = 0.5
+statusFrame.BorderSizePixel = 0
+statusFrame.Parent = content
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 6)
+statusCorner.Parent = statusFrame
+
+statusText = Instance.new("TextLabel")
+statusText.Size = UDim2.new(1, 0, 1, 0)
+statusText.BackgroundTransparency = 1
+statusText.Text = "Status: IDLE"
+statusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusText.Font = Enum.Font.Gotham
+statusText.TextSize = 12
+statusText.TextXAlignment = Enum.TextXAlignment.Center
+statusText.Parent = statusFrame
+
+local dragging = false
+local dragInput, dragStart, startPos
+
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+titleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- ========== УПРАВЛЕНИЕ ФАРМОМ ==========
+
+local function stopFarming()
+    ScriptActive = false
+    stopAttack()
+    stopStandFarm()
+    if statusText then
+        statusText.Text = "Status: STOPPED"
+    end
+    if farmingCoroutine then
+        coroutine.close(farmingCoroutine)
+        farmingCoroutine = nil
+    end
+end
+
+local function startFarming()
+    if ScriptActive then return end
+    ScriptActive = true
+    if statusText then
+        statusText.Text = "Status: RUNNING..."
+    end
+    
+    farmingCoroutine = coroutine.create(function()
+        local success, err = pcall(myFarmLogic)
+        if not success then
+            if statusText then
+                statusText.Text = "Status: ERROR"
+            end
+            warn("Farm error:", err)
+        end
+        ScriptActive = false
+        stopAttack()
+        stopStandFarm()
+        if statusText then
+            statusText.Text = "Status: IDLE"
+        end
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        toggleBtn.Text = "▶ START FARM"
+    end)
+    coroutine.resume(farmingCoroutine)
+end
+
+toggleBtn.MouseButton1Click:Connect(function()
+    if ScriptActive then
+        stopFarming()
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        toggleBtn.Text = "▶ START FARM"
+    else
+        startFarming()
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+        toggleBtn.Text = "⏹ STOP FARM"
+    end
+end)
+
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    RE = character:WaitForChild("RemoteEvent")
+    RF = character:WaitForChild("RemoteFunction")
+    if ScriptActive then
+        stopAttack()
+        task.wait(0.2)
+        if standFarmMode then
+            toggleStand()
+            task.wait(0.2)
+        end
+    end
+end)
