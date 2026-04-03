@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -10,7 +9,6 @@ local character = player.Character or player.CharacterAdded:Wait()
 local rootPart = character:WaitForChild("HumanoidRootPart")
 local camera = Workspace.CurrentCamera
 
--- Получаем RemoteEvent и RemoteFunction для атак
 local RE = character:WaitForChild("RemoteEvent")
 local RF = character:WaitForChild("RemoteFunction")
 
@@ -39,8 +37,6 @@ local skills = {
     {Skill = "Agility III", SkillTreeType = "Character"},
     {Skill = "Worthiness", SkillTreeType = "Character"}
 }
-
--- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 local function getCharacter()
     local char = player.Character or player.CharacterAdded:Wait()
@@ -255,8 +251,6 @@ local function useItem(itemName)
     task.wait(5)
 end
 
--- ========== ФУНКЦИИ АТАКИ ==========
-
 local function startAttack()
     if isAttacking then return end
     isAttacking = true
@@ -283,10 +277,7 @@ local function stopAttack()
     RE:FireServer("HoldAttack", attackTable)
 end
 
--- ========== ФУНКЦИИ СТЕНДА ==========
-
 local function toggleStand()
-    -- Выключаем атаку перед призывом стенда
     stopAttack()
     task.wait(0.2)
     
@@ -312,7 +303,6 @@ local function getStandMorph()
     return nil
 end
 
--- Прикрепление стенда к NPC (только позиция, без постоянного обновления)
 local function attachStandToTarget(target)
     local standMorph = getStandMorph()
     if not standMorph or not target then return end
@@ -320,7 +310,6 @@ local function attachStandToTarget(target)
     local targetRoot = target:FindFirstChild("HumanoidRootPart")
     if not targetRoot then return end
     
-    -- Устанавливаем позицию стенда за спиной NPC на 3 студия
     local standPosition = targetRoot.Position - targetRoot.CFrame.LookVector * 3
     local standCFrame = CFrame.new(standPosition)
     
@@ -342,18 +331,14 @@ local function updatePlayerPositionBehind(npc, distance)
     
     if not rootPart or not rootPart.Parent then return false end
     
-    -- Вычисляем позицию за спиной NPC
     local behindPosition = targetRoot.Position - targetRoot.CFrame.LookVector * distance
     
-    -- Устанавливаем позицию игрока
     rootPart.CFrame = CFrame.new(behindPosition)
-    -- Поворачиваем лицом к NPC
     rootPart.CFrame = CFrame.lookAt(rootPart.Position, targetRoot.Position)
     
     return true
 end
 
--- Функция для обновления позиции игрока выше головы NPC
 local function updatePlayerPositionAbove(npc, height)
     if not npc or not npc.Parent then return false end
     
@@ -362,10 +347,8 @@ local function updatePlayerPositionAbove(npc, height)
     
     if not rootPart or not rootPart.Parent then return false end
     
-    -- Вычисляем позицию выше головы
     local abovePosition = targetHead.Position + Vector3.new(0, height, 0)
     
-    -- Устанавливаем позицию игрока
     rootPart.CFrame = CFrame.new(abovePosition)
     
     return true
@@ -385,25 +368,17 @@ local function stopStandFarm()
     stopAttack()
 end
 
--- ========== ФУНКЦИИ ФАРМА ==========
-
--- Обычный фарм (без стенда) - игрок за спиной NPC на 4 студия
 local function killLogicNormal(npc)
     if not npc or not npc.Parent then return false end
     
-    -- Останавливаем старый heartbeat если есть
     stopHeartbeat()
-    
-    -- Включаем атаку
     startAttack()
     
-    -- Запускаем постоянное обновление позиции
     heartbeatConnection = RunService.Heartbeat:Connect(function()
         if not ScriptActive or standFarmMode or not npc or not npc.Parent then
             return
         end
         
-        -- Проверяем жив ли игрок
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             return
         end
@@ -421,7 +396,6 @@ local function killLogicNormal(npc)
             break
         end
         
-        -- Проверяем жив ли игрок
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             break
         end
@@ -433,7 +407,6 @@ local function killLogicNormal(npc)
         end
     end
     
-    -- Останавливаем обновление позиции и атаку
     stopHeartbeat()
     stopAttack()
     task.wait(0.2)
@@ -441,7 +414,6 @@ local function killLogicNormal(npc)
     return npcDied
 end
 
--- Фарм со стендом - игрок выше головы NPC на 16 студий, стенд сзади
 local function killLogicWithStand(npc)
     if not npc or not npc.Parent then return false end
     
@@ -452,38 +424,30 @@ local function killLogicWithStand(npc)
         statusText.Text = "⚔️ Attacking " .. npc.Name .. " with stand..."
     end
     
-    -- Останавливаем старый heartbeat если есть
     stopHeartbeat()
-    
-    -- Включаем атаку
     startAttack()
     
-    -- Прикрепляем стенд 1 раз в начальную позицию
     local standMorph = getStandMorph()
     if standMorph then
         local standPosition = targetRoot.Position
         standMorph:SetPrimaryPartCFrame(CFrame.new(standPosition))
     end
     
-    -- Запускаем постоянное обновление позиции игрока и стенда
     heartbeatConnection = RunService.Heartbeat:Connect(function()
         if not ScriptActive or not standFarmMode or not npc or not npc.Parent then
             return
         end
         
-        -- Проверяем жив ли игрок
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             return
         end
         
-        -- Обновляем позицию игрока выше головы NPC
         local targetHead = npc:FindFirstChild("Head")
         if targetHead then
             local abovePosition = targetHead.Position + Vector3.new(0, 16, 0)
             rootPart.CFrame = CFrame.new(abovePosition)
         end
         
-        -- Обновляем позицию стенда за спиной NPC
         local currentStand = getStandMorph()
         if currentStand and npc and npc.Parent then
             local currentTargetRoot = npc:FindFirstChild("HumanoidRootPart")
@@ -508,7 +472,6 @@ local function killLogicWithStand(npc)
             break
         end
         
-        -- Показываем здоровье раз в секунду
         if lastHealth ~= currentHealth.Value and tick() % 1 < 0.1 then
             lastHealth = currentHealth.Value
             if statusText then
@@ -516,7 +479,6 @@ local function killLogicWithStand(npc)
             end
         end
         
-        -- Проверяем жив ли игрок
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             if statusText then
                 statusText.Text = "💀 Player died during combat!"
@@ -524,7 +486,6 @@ local function killLogicWithStand(npc)
             break
         end
         
-        -- Проверяем, не пропал ли стенд (раз в 2 секунды)
         if tick() % 2 < 0.1 then
             if not hasStand() then
                 if statusText then
@@ -533,7 +494,6 @@ local function killLogicWithStand(npc)
                 toggleStand()
                 task.wait(1)
                 if hasStand() then
-                    -- Обновляем позицию стенда
                     local currentTargetRoot = npc:FindFirstChild("HumanoidRootPart")
                     if currentTargetRoot then
                         local newStand = getStandMorph()
@@ -548,7 +508,6 @@ local function killLogicWithStand(npc)
         
         task.wait(0.2)
         
-        -- Таймаут 60 секунд
         if tick() - startTime > 60 then
             if statusText then
                 statusText.Text = "⏰ Combat timeout for " .. npc.Name
@@ -557,7 +516,6 @@ local function killLogicWithStand(npc)
         end
     end
     
-    -- Останавливаем обновление позиции и атаку
     stopHeartbeat()
     stopAttack()
     task.wait(0.2)
@@ -616,7 +574,6 @@ local function farmNPCs(npcName, neededCount)
     end
 end
 
--- ЗАМЕНЁННАЯ ФУНКЦИЯ farmWithStand
 local function farmWithStand(npcName, neededCount)
     if not ScriptActive then return end
     
@@ -626,7 +583,6 @@ local function farmWithStand(npcName, neededCount)
         statusText.Text = "🤖 Stand farm " .. npcName .. ": 0/" .. neededCount
     end
     
-    -- Бесконечные попытки призыва стенда
     local standMorph = nil
     local summonAttempts = 0
     
@@ -636,11 +592,9 @@ local function farmWithStand(npcName, neededCount)
             statusText.Text = "🔄 Summoning stand (attempt " .. summonAttempts .. ")..."
         end
         
-        -- Призываем стенд (атака выключается внутри toggleStand)
         toggleStand()
         task.wait(2)
         
-        -- Проверяем, появился ли стенд
         standMorph = getStandMorph()
         
         if not standMorph then
@@ -663,19 +617,16 @@ local function farmWithStand(npcName, neededCount)
         statusText.Text = "✅ Stand summoned successfully!"
     end
     
-    -- Убеждаемся что атака включена
     if not isAttacking then
         startAttack()
     end
     
     while killedCount < neededCount and ScriptActive and standFarmMode do
-        -- Проверяем наличие стенда
         if not hasStand() then
             if statusText then
                 statusText.Text = "🔄 Stand lost, resummoning..."
             end
             
-            -- Бесконечные попытки восстановить стенд
             local resummonAttempts = 0
             local resummonSuccess = false
             
@@ -711,7 +662,6 @@ local function farmWithStand(npcName, neededCount)
             end
         end
         
-        -- Проверяем жив ли игрок
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             if statusText then
                 statusText.Text = "💀 Waiting for respawn..."
@@ -725,7 +675,6 @@ local function farmWithStand(npcName, neededCount)
                 stopAttack()
                 task.wait(0.3)
                 
-                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
                 local respawnSummonAttempts = 0
                 local respawnSummonSuccess = false
                 
@@ -764,10 +713,8 @@ local function farmWithStand(npcName, neededCount)
                 standMorph = getStandMorph()
             end
             task.wait(1)
-            continue
         end
         
-        -- Ищем NPC
         local target = findAliveNPC(npcName)
         
         if target then
@@ -777,14 +724,12 @@ local function farmWithStand(npcName, neededCount)
                 statusText.Text = "🎯 Found " .. npcName .. ", engaging..."
             end
             
-            -- Идём к NPC
             local targetRoot = target:FindFirstChild("HumanoidRootPart")
             if targetRoot then
                 travelTo(targetRoot.Position)
                 task.wait(0.5)
             end
             
-            -- Запускаем фарм (атака включается внутри killLogicWithStand)
             local targetDied = killLogicWithStand(target)
             
             if targetDied then
@@ -814,313 +759,33 @@ local function farmWithStand(npcName, neededCount)
     end
 end
 
-local function takeQuest(npcName, questValue)
+-- НОВАЯ ФУНКЦИЯ takeQuest
+local function takeQuest(arg1)
     if not ScriptActive then return false end
     
-    -- Выключаем атаку перед диалогом
     stopAttack()
     task.wait(0.2)
     
     if statusText then
-        statusText.Text = "📜 Quest: " .. npcName
+        statusText.Text = "📜 Taking quest from " .. arg1["NPC"]
     end
-    print("📜 Quest:", npcName, questValue)
     
-    local dialogueData = {
-        DialogueName = questValue,
-        Speaker = npcName
+    local args = {
+        [1] = "EndDialogue",
+        [2] = arg1
     }
     
-    RE:FireServer('DialogueInteracted', dialogueData)
+    game:GetService("Players").LocalPlayer.Character.RemoteEvent:FireServer(unpack(args))
     
-    task.wait(1)
-    
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    local maxAttempts = 30
-    
-    for attempt = 1, maxAttempts do
-        local playerGui = player:FindFirstChild("PlayerGui")
-        if playerGui then
-            local dialogue = playerGui:FindFirstChild("Dialogue")
-            if dialogue and dialogue.Enabled then
-                for _, btn in ipairs(dialogue:GetDescendants()) do
-                    if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible and btn.Active then
-                        local centerX = btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2
-                        local centerY = btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2
-                        
-                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-                        task.wait(0.05)
-                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-                        task.wait(0.3)
-                        break
-                    end
-                end
-            else
-                if statusText then
-                    statusText.Text = "✅ Quest taken: " .. npcName
-                end
-                print("✅ Quest taken:", npcName)
-                return true
-            end
-        end
-        task.wait(0.3)
-    end
+    task.wait(2)
     
     if statusText then
-        statusText.Text = "⚠️ Quest timeout: " .. npcName
+        statusText.Text = "✅ Quest taken from " .. arg1["NPC"]
     end
+    
     return true
 end
 
-local function mistaQuest()
-    if not ScriptActive then return false end
-    
-    -- Выключаем атаку перед диалогом
-    stopAttack()
-    task.wait(0.2)
-    
-    if statusText then
-        statusText.Text = "📜 Starting Mista quest..."
-    end
-    
-    -- Открываем диалог с Мистой
-    local dialogueData = {
-        DialogueName = "Storyline #7",
-        Speaker = "Mista"
-    }
-    
-    RE:FireServer('DialogueInteracted', dialogueData)
-    task.wait(1)
-    
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    local playerGui = player:WaitForChild("PlayerGui")
-    
-    -- Ждём появления диалогового окна
-    local dialogueGui = nil
-    local maxWait = 20
-    local waitCount = 0
-    
-    while not dialogueGui and waitCount < maxWait and ScriptActive do
-        for _, gui in pairs(playerGui:GetChildren()) do
-            if gui.Name:lower():find("dialogue") then
-                dialogueGui = gui
-                break
-            end
-        end
-        task.wait(0.5)
-        waitCount = waitCount + 1
-    end
-    
-    if not dialogueGui then
-        if statusText then
-            statusText.Text = "⚠️ Mista dialogue not found!"
-        end
-        return false
-    end
-    
-    -- Функция для нажатия на кнопку
-    local function clickButton(button)
-        if not button or not button.Visible then return false end
-        local inset = GuiService:GetGuiInset()
-        local centerX = button.AbsolutePosition.X + (button.AbsoluteSize.X / 2) + inset.X
-        local centerY = button.AbsolutePosition.Y + (button.AbsoluteSize.Y / 2) + inset.Y
-        
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-        return true
-    end
-    
-    -- Функция для нажатия на левую стрелку
-    local function clickLeftArrow()
-        for _, child in pairs(dialogueGui:GetDescendants()) do
-            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
-                local name = child.Name:lower()
-                local text = child.Text and child.Text:lower() or ""
-                if name:find("left") or name:find("arrow") or text:find("<") or text:find("←") then
-                    updateStatus("👉 Clicking LEFT")
-                    return clickButton(child)
-                end
-            end
-        end
-        
-        local leftmostButton = nil
-        local leftmostX = math.huge
-        
-        for _, child in pairs(dialogueGui:GetDescendants()) do
-            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
-                local x = child.AbsolutePosition.X
-                if x < leftmostX then
-                    leftmostX = x
-                    leftmostButton = child
-                end
-            end
-        end
-        
-        if leftmostButton then
-            updateStatus("👉 Clicking LEFTMOST")
-            return clickButton(leftmostButton)
-        end
-        
-        return false
-    end
-    
-    -- Функция для нажатия на правую стрелку
-    local function clickRightArrow()
-        for _, child in pairs(dialogueGui:GetDescendants()) do
-            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
-                local name = child.Name:lower()
-                local text = child.Text and child.Text:lower() or ""
-                if name:find("right") or name:find("arrow") or text:find(">") or text:find("→") then
-                    updateStatus("👉 Clicking RIGHT")
-                    return clickButton(child)
-                end
-            end
-        end
-        
-        local rightmostButton = nil
-        local rightmostX = -math.huge
-        
-        for _, child in pairs(dialogueGui:GetDescendants()) do
-            if (child:IsA("ImageButton") or child:IsA("TextButton")) and child.Visible and child.Active then
-                local x = child.AbsolutePosition.X
-                if x > rightmostX then
-                    rightmostX = x
-                    rightmostButton = child
-                end
-            end
-        end
-        
-        if rightmostButton then
-            updateStatus("👉 Clicking RIGHTMOST")
-            return clickButton(rightmostButton)
-        end
-        
-        return false
-    end
-    
-    -- Функция для получения Option2 TextButton
-    local function getOption2TextButton()
-        local options = dialogueGui:FindFirstChild("Options")
-        if options then
-            local option2 = options:FindFirstChild("Option2")
-            if option2 then
-                return option2:FindFirstChildWhichIsA("TextButton")
-            end
-        end
-        return nil
-    end
-    
-    -- Функция для получения основного текста диалога
-    local function getDialogueText()
-        local interact = dialogueGui:FindFirstChild("Interact")
-        if interact then
-            local frame = interact:FindFirstChild("Frame")
-            if frame then
-                return frame:FindFirstChildWhichIsA("TextLabel")
-            end
-        end
-        return nil
-    end
-    
-    -- Функция для отслеживания стабильности текста
-    local function waitForBothTextsStable(stableTimeNeeded, maxWait)
-        stableTimeNeeded = stableTimeNeeded or 3
-        maxWait = maxWait or 15
-        
-        local dialogueText = getDialogueText()
-        local option2Text = getOption2TextButton()
-        
-        if not dialogueText and not option2Text then
-            updateStatus("⚠️ No text elements found!")
-            return false
-        end
-        
-        local lastDialogueText = dialogueText and dialogueText.Text or ""
-        local lastOption2Text = option2Text and option2Text.Text or ""
-        local stableTime = 0
-        local startTime = tick()
-        
-        updateStatus("🔍 Waiting for texts to stabilize (" .. stableTimeNeeded .. "s)...")
-        
-        while stableTime < stableTimeNeeded and tick() - startTime < maxWait and ScriptActive do
-            task.wait(0.2)
-            
-            local currentDialogue = dialogueText and dialogueText.Text or ""
-            local currentOption2 = option2Text and option2Text.Text or ""
-            
-            if currentDialogue ~= lastDialogueText or currentOption2 ~= lastOption2Text then
-                stableTime = 0
-            else
-                stableTime = stableTime + 0.2
-            end
-            
-            lastDialogueText = currentDialogue
-            lastOption2Text = currentOption2
-        end
-        
-        if stableTime >= stableTimeNeeded then
-            updateStatus("✅ Texts stable for " .. stableTimeNeeded .. " seconds!")
-            return true
-        end
-        
-        updateStatus("⚠️ Timeout waiting for text stability")
-        return false
-    end
-    
-    -- ========== ОСНОВНАЯ ЛОГИКА ==========
-    updateStatus("📜 Starting Mista quest...")
-    
-    local clickSequence = {"left", "left", "right"}
-    local step = 1
-    
-    while ScriptActive and dialogueGui and dialogueGui.Parent == playerGui do
-        updateStatus("Step " .. step .. " of sequence - waiting for texts to stabilize...")
-        
-        -- Ждём стабильности текста 3 секунды
-        local isStable = waitForBothTextsStable(3, 15)
-        
-        if not isStable then
-            updateStatus("⚠️ Timeout, breaking...")
-            break
-        end
-        
-        if step <= #clickSequence then
-            -- Выполняем последовательность: лево, лево, право
-            local direction = clickSequence[step]
-            if direction == "left" then
-                updateStatus("STEP " .. step .. ": Clicking LEFT")
-                clickLeftArrow()
-            elseif direction == "right" then
-                updateStatus("STEP " .. step .. ": Clicking RIGHT")
-                clickRightArrow()
-            end
-            task.wait(1)
-            step = step + 1
-        else
-            -- После последовательности кликаем налево до конца
-            updateStatus("Sequence complete! Clicking LEFT until dialogue ends...")
-            local clickCount = 0
-            while dialogueGui and dialogueGui.Parent == playerGui and ScriptActive do
-                clickLeftArrow()
-                clickCount = clickCount + 1
-                task.wait(0.5)
-            end
-            updateStatus("✅ Dialogue closed after " .. clickCount .. " left clicks!")
-            break
-        end
-    end
-    
-    if statusText then
-        statusText.Text = "✅ Mista quest completed!"
-    end
-    
-    updateStatus("✅ Mista quest finished!")
-    task.wait(1)
-    return true
-end
-
--- ЗАМЕНЁННАЯ ФУНКЦИЯ startStandFarming
 local function startStandFarming()
     while ScriptActive do
         local stats = player:FindFirstChild("PlayerStats")
@@ -1155,25 +820,21 @@ local function startStandFarming()
                 end
                 toggleStand()
                 
-                -- РЕСЕТ ПЕРСОНАЖА ПОСЛЕ ПОЛУЧЕНИЯ ХОРОШЕГО СТЕНДА
                 if statusText then
                     statusText.Text = "🔄 Resetting character to fix stand summon..."
                 end
                 
-                -- Убиваем персонажа
                 local humanoid = character:FindFirstChild("Humanoid")
                 if humanoid then
                     humanoid.Health = 0
                 end
                 stopAttack()
                 
-                -- Ждём респавна
                 character = player.CharacterAdded:Wait()
                 rootPart = character:WaitForChild("HumanoidRootPart")
                 RE = character:WaitForChild("RemoteEvent")
                 RF = character:WaitForChild("RemoteFunction")
                 
-                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
                 local respawnAttempts = 0
                 local respawnSuccess = false
                 
@@ -1210,7 +871,6 @@ local function startStandFarming()
                     statusText.Text = "✅ Character respawned, ready to use stand!"
                 end
                 
-                -- Возвращаем название стенда
                 return currentStand
             end
         else
@@ -1243,12 +903,15 @@ local function startStandFarming()
     end
 end
 
--- ========== ОСНОВНАЯ ЛОГИКА ==========
-
 local function myFarmLogic()
     local prestige = getPrestige()
     if prestige == 0 then
-        takeQuest("Giorno", "Storyline #1")
+        takeQuest({
+            ["NPC"] = "Giorno",
+            ["Option"] = "Option2",
+            ["Dialogue"] = "Dialogue3"
+        })
+        
         farmNPCs("Security Guard", 5)
         
         local stand = startStandFarming()
@@ -1258,26 +921,60 @@ local function myFarmLogic()
                 statusText.Text = "🎭 Stand mode activated for: " .. stand
             end
             
-            takeQuest("Giorno", "Storyline #1")
-            takeQuest("Koichi", "Storyline #2")
-            takeQuest("Giorno", "Storyline #3")
+            takeQuest({
+                ["NPC"] = "Giorno",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
+            
+            takeQuest({
+                ["NPC"] = "Koichi",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
+            
+            takeQuest({
+                ["NPC"] = "Giorno",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
             
             farmWithStand("Leaky Eye Luca", 1)
             
-            takeQuest("Giorno", "Storyline #3")
+            takeQuest({
+                ["NPC"] = "Giorno",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
             
             farmWithStand("Bucciarati", 1)
 
-            takeQuest("Bucciarati", "Storyline #4")
-            takeQuest("Giorno", "Storyline #5")
-            takeQuest("Fugo", "Storyline #6")
+            takeQuest({
+                ["NPC"] = "Bucciarati",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
+            
+            takeQuest({
+                ["NPC"] = "Giorno",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
+            
+            takeQuest({
+                ["NPC"] = "Fugo",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
 
-            mistaQuest()
+            takeQuest({
+                ["NPC"] = "Mista",
+                ["Option"] = "Option2",
+                ["Dialogue"] = "Dialogue3"
+            })
         end
     end
 end
-
--- ========== СОЗДАНИЕ GUI ==========
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "FarmGUI"
@@ -1406,8 +1103,6 @@ UserInputService.InputChanged:Connect(function(input)
         mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
-
--- ========== УПРАВЛЕНИЕ ФАРМОМ ==========
 
 local function stopFarming()
     ScriptActive = false
