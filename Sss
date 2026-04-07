@@ -118,7 +118,7 @@ local function useItemThroughGUI(itemName)
                 
                 if opt1 and opt2 then
                     local button = opt1:FindFirstChild("TextButton")
-                    local textLabel = opt2:FindFirstChild("TextButton") or opt2
+                    local textLabel = opt2:FindFirstChild("TextButton")
                     
                     if button and textLabel then
                         updateStatus("💬 Waiting for dialogue to complete...")
