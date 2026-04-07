@@ -196,32 +196,80 @@ local function mobileTap(button)
 end
 
 -- ========== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ==========
+-- ========== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ==========
 local function useItemThroughGUI(itemName)
     local humanoid = character:FindFirstChild("Humanoid")
-    if not humanoid then return false end
+    if not humanoid then 
+        updateStatus("❌ Humanoid not found!")
+        return false 
+    end
     
+    -- Ищем предмет в инвентаре
     local tool = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
     
     if not tool then
-        updateStatus("❌ " .. itemName .. " not found!")
+        updateStatus("❌ " .. itemName .. " not found in inventory!")
         return false
     end
     
+    updateStatus("📦 Equipping " .. itemName .. "...")
+    
+    -- Если предмет в рюкзаке - экипируем
     if tool.Parent == backpack then
-        humanoid:EquipTool(tool)
+        -- Метод 1: через Humanoid
+        local success = pcall(function()
+            humanoid:EquipTool(tool)
+        end)
+        
+        if not success then
+            -- Метод 2: просто перемещаем в персонажа
+            pcall(function()
+                tool.Parent = character
+            end)
+        end
+        
         task.wait(0.5)
+        
+        -- Проверяем, экипирован ли предмет
+        local equippedTool = character:FindFirstChild(itemName)
+        if not equippedTool then
+            updateStatus("⚠️ Failed to equip " .. itemName .. ", trying again...")
+            pcall(function()
+                tool.Parent = character
+            end)
+            task.wait(0.5)
+        end
     end
     
-    updateStatus("📦 Using " .. itemName .. "...")
-    tool:Activate()
+    -- Ещё раз проверяем, что предмет в персонаже
+    local finalTool = character:FindFirstChild(itemName)
+    if not finalTool then
+        updateStatus("❌ Cannot equip " .. itemName)
+        return false
+    end
+    
+    updateStatus("✨ Activating " .. itemName .. "...")
+    
+    -- Активируем предмет
+    pcall(function()
+        finalTool:Activate()
+    end)
+    
+    task.wait(1) -- Даем время на открытие GUI
     
     -- Ищем GUI диалога
     local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
     if not dialogueGui then
-        dialogueGui = player.PlayerGui:WaitForChild("DialogueGui", 10)
+        for i = 1, 10 do
+            dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+            if dialogueGui then break end
+            task.wait(0.5)
+        end
     end
     
     if dialogueGui then
+        updateStatus("💬 Dialogue GUI found, interacting...")
+        
         local frame = dialogueGui:FindFirstChild("Frame")
         if frame then
             local options = frame:FindFirstChild("Options")
@@ -234,7 +282,13 @@ local function useItemThroughGUI(itemName)
                     local textLabel = opt2:FindFirstChild("TextButton") or opt2
                     
                     if button and textLabel then
-                        updateStatus("💬 Waiting for dialogue to complete...")
+                        -- Ждем появления текста
+                        local waitStart = tick()
+                        while textLabel.Text == "" and tick() - waitStart < 5 do
+                            task.wait(0.2)
+                        end
+                        
+                        updateStatus("💬 Dialogue text loaded, clicking...")
                         waitForDialogueToEnd(textLabel)
                         
                         -- Выбираем метод клика в зависимости от устройства
@@ -244,25 +298,42 @@ local function useItemThroughGUI(itemName)
                             clickSuccess = pcClick(button)
                         elseif deviceType == "Mobile" then
                             clickSuccess = mobileTap(button)
-                        else
-                            -- Fallback: просто выбираем объект
-                            GuiService.SelectedObject = button
-                            task.wait(0.2)
-                            GuiService.SelectedObject = nil
-                            clickSuccess = true
+                        end
+                        
+                        -- Дополнительная попытка через fireclickdetector если есть
+                        if not clickSuccess then
+                            local clickDetector = button:FindFirstChildOfClass("ClickDetector")
+                            if clickDetector then
+                                pcall(function()
+                                    fireclickdetector(clickDetector)
+                                end)
+                                clickSuccess = true
+                            end
                         end
                         
                         if clickSuccess then
                             updateStatus("✅ " .. itemName .. " used successfully!")
+                            task.wait(1)
                             return true
                         end
                     end
                 end
             end
         end
+    else
+        updateStatus("⚠️ Dialogue GUI not found for " .. itemName)
+        -- Возможно GUI еще не появился, ждем подольше
+        for i = 1, 15 do
+            dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+            if dialogueGui then
+                updateStatus("💬 Dialogue GUI appeared after delay!")
+                break
+            end
+            task.wait(0.5)
+        end
     end
     
-    updateStatus("⚠️ Dialogue GUI not found for " .. itemName)
+    updateStatus("⚠️ Failed to complete " .. itemName .. " interaction")
     return false
 end
 
