@@ -929,31 +929,37 @@ local function myFarmLogic()
             if statusText then
                 statusText.Text = "🎭 Stand mode activated for: " .. stand
             end
-            endDialogue("Storyline #1", "Dialogue3")
+            endDialogue("Storyline #1", "Dialogue2")
             task.wait(0.1)
             
-            endDialogue("Storyline #2")
+            endDialogue("Storyline #2", "Dialogue3")
             task.wait(0.1)
             
-            endDialogue("Storyline #3")
+            endDialogue("Storyline #3", "Dialogue2")
             task.wait(0.1)
             
             farmWithStand("Leaky Eye Luca", 1)
             
-            endDialogue("Storyline #3")
+            endDialogue("Storyline #3", "Dialogue3")
             task.wait(0.1)
             
             farmWithStand("Bucciarati", 1)
             
-            endDialogue("Storyline #4")
+            endDialogue("Storyline #4", "Dialogue3")
             task.wait(0.1)
             
-            endDialogue("Storyline #5")
+            endDialogue("Storyline #5", "Dialogue4")
             task.wait(0.1)
             
-            endDialogue("Storyline #6")
+            endDialogue("Storyline #6", "Dialogue5")
             task.wait(0.1)
-            endDialogue("Storyline #7")
+            endDialogue("Storyline #7", "Dialogue6")
+            task.wait(0.1)
+            endDialogue("Storyline #8", "Dialogue5")
+            task.wait(0.1)
+            endDialogue("Storyline #9", "Dialogue7")
+            task.wait(0.1)
+            endDialogue("Storyline #10", "Dialogue3")
             task.wait(0.1)
         end
     end
