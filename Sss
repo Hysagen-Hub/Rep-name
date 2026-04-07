@@ -94,47 +94,82 @@ local function useItemThroughGUI(itemName)
     local humanoid = character:FindFirstChild("Humanoid")
     if not humanoid then return false end
     
+    -- Экипируем предмет
     if tool.Parent == backpack then
         humanoid:EquipTool(tool)
         task.wait(0.5)
     end
     
     updateStatus("📦 Using " .. itemName .. "...")
-    tool:Activate()
     
-    -- Ищем GUI диалога
-    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
-    if not dialogueGui then
-        dialogueGui = player.PlayerGui:WaitForChild("DialogueGui", 10)
+    -- СПОСОБ 1: Пытаемся использовать через холдер (ItemHolder)
+    local itemHolder = player.PlayerGui:FindFirstChild("ItemHolder")
+    if itemHolder then
+        -- Ищем кнопку использования предмета
+        local useButton = itemHolder:FindFirstChild("UseButton") or 
+                          itemHolder:FindFirstChild("ConfirmButton") or
+                          itemHolder:FindFirstChild("Use")
+        
+        if useButton and useButton:IsA("TextButton") then
+            -- Кликаем по кнопке использования
+            GuiService.SelectedObject = useButton
+            task.wait(0.2)
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+            task.wait(0.1)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+            task.wait(0.2)
+            GuiService.SelectedObject = nil
+            updateStatus("✅ " .. itemName .. " used via ItemHolder!")
+            return true
+        end
+        
+        -- Альтернатива: ищем любую кнопку в ItemHolder
+        for _, btn in ipairs(itemHolder:GetDescendants()) do
+            if btn:IsA("TextButton") and (btn.Text:lower():find("use") or btn.Text:lower():find("confirm") or btn.Text == "✔") then
+                GuiService.SelectedObject = btn
+                task.wait(0.2)
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                task.wait(0.1)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+                task.wait(0.2)
+                GuiService.SelectedObject = nil
+                updateStatus("✅ " .. itemName .. " used!")
+                return true
+            end
+        end
     end
     
+    -- СПОСОБ 2: Просто активируем инструмент (если нет GUI)
+    tool:Activate()
+    task.wait(1)
+    
+    -- СПОСОБ 3: Проверяем диалог (для квестовых предметов)
+    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
     if dialogueGui then
         local frame = dialogueGui:FindFirstChild("Frame")
         if frame then
             local options = frame:FindFirstChild("Options")
             if options then
-                local opt1 = options:FindFirstChild("Option1")
-                local opt2 = options:FindFirstChild("Option2")
-                
-                if opt1 and opt2 then
-                    local button = opt1:FindFirstChild("TextButton")
-                    local textLabel = opt2:FindFirstChild("TextButton")
-                    
-                    if button and textLabel then
-                        updateStatus("💬 Waiting for dialogue to complete...")
-                        waitForDialogueToEnd(textLabel)
+                -- Ищем любую кнопку для подтверждения
+                for _, child in ipairs(options:GetDescendants()) do
+                    if child:IsA("TextButton") and child.Visible then
+                        -- Ждём появления текста диалога
+                        local textLabel = frame:FindFirstChildOfClass("TextLabel") or 
+                                         options:FindFirstChildOfClass("TextLabel")
                         
-                        -- Кликаем по кнопке
-                        GuiService.SelectedObject = button
+                        if textLabel then
+                            waitForDialogueToEnd(textLabel)
+                        end
+                        
+                        task.wait(0.5)
+                        GuiService.SelectedObject = child
                         task.wait(0.2)
-                        
                         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
                         task.wait(0.1)
                         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-                        
                         task.wait(0.2)
                         GuiService.SelectedObject = nil
-                        updateStatus("✅ " .. itemName .. " used successfully!")
+                        updateStatus("✅ " .. itemName .. " used via Dialogue!")
                         return true
                     end
                 end
@@ -142,7 +177,7 @@ local function useItemThroughGUI(itemName)
         end
     end
     
-    updateStatus("⚠️ Dialogue GUI not found for " .. itemName)
+    updateStatus("⚠️ Could not use " .. itemName .. " - no UI found")
     return false
 end
 
