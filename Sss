@@ -124,61 +124,16 @@ local function useItemThroughGUI(itemName)
                         updateStatus("💬 Waiting for dialogue to complete...")
                         waitForDialogueToEnd(textLabel)
                         
-                        -- ========== КРОСС-ПЛАТФОРМЕННОЕ НАЖАТИЕ ==========
-                        -- Пытаемся найти кнопку в мобильном интерфейсе
-                        local mobileButton = button:FindFirstChild("MobileButton")
+                        -- Кликаем по кнопке
+                        GuiService.SelectedObject = button
+                        task.wait(0.2)
                         
-                        -- Метод 1: Fire сигналы кнопки (работает везде)
-                        local success = pcall(function()
-                            -- Эмулируем все возможные события кнопки
-                            button.MouseButton1Click:Fire()
-                            button.Activated:Fire()
-                            
-                            -- Если есть мобильная кнопка
-                            if mobileButton then
-                                mobileButton.MouseButton1Click:Fire()
-                                mobileButton.Activated:Fire()
-                            end
-                        end)
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                        task.wait(0.1)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
                         
-                        -- Метод 2: Прямая симуляция тача (для мобильных)
-                        if not success or UserInputService.TouchEnabled then
-                            pcall(function()
-                                -- Используем TouchTap для мобильных
-                                if button.TouchTap then
-                                    button.TouchTap:Fire()
-                                end
-                                
-                                -- Альтернативный метод через InputObject
-                                local touchInput = {
-                                    UserInputType = Enum.UserInputType.Touch,
-                                    UserInputState = Enum.UserInputState.Begin,
-                                    Position = Vector2.new(button.AbsolutePosition.X + button.AbsoluteSize.X/2, 
-                                                          button.AbsolutePosition.Y + button.AbsoluteSize.Y/2)
-                                }
-                                
-                                -- Пытаемся передать touch событие
-                                button.InputBegan:Fire(setmetatable(touchInput, {__index = function() return nil end}))
-                                task.wait(0.05)
-                                touchInput.UserInputState = Enum.UserInputState.End
-                                button.InputEnded:Fire(setmetatable(touchInput, {__index = function() return nil end}))
-                            end)
-                        end
-                        
-                        -- Метод 3: GUI Service для PC (запасной вариант)
-                        if not UserInputService.TouchEnabled then
-                            pcall(function()
-                                GuiService.SelectedObject = button
-                                task.wait(0.1)
-                                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-                                task.wait(0.05)
-                                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-                                task.wait(0.1)
-                                GuiService.SelectedObject = nil
-                            end)
-                        end
-                        
-                        task.wait(0.5)
+                        task.wait(0.2)
+                        GuiService.SelectedObject = nil
                         updateStatus("✅ " .. itemName .. " used successfully!")
                         return true
                     end
@@ -645,10 +600,10 @@ end
 local function startStandFarming()
     while ScriptActive do
         local stats = player:FindFirstChild("PlayerStats")
-        if not stats then task.wait(2) continue end
+        if not stats then task.wait(2) end
         
         local standVal = stats:FindFirstChild("Stand")
-        if not standVal then task.wait(2) continue end
+        if not standVal then task.wait(2) end
         
         local currentStand = standVal.Value
 
