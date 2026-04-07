@@ -3,7 +3,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
@@ -55,7 +55,39 @@ local function endDialogue(Storyline, Dialogue)
     end)
 end
 
--- ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОЖИДАНИЯ ДИАЛОГА ==========
+-- ========== ОПРЕДЕЛЕНИЕ УСТРОЙСТВА ==========
+local deviceType = "PC"
+local VirtualInputManager = nil
+local pcModeAvailable = false
+
+local function detectDevice()
+    local uis = UserInputService
+    
+    if uis.TouchEnabled then
+        deviceType = "Mobile"
+    elseif uis.GamepadEnabled and not uis.TouchEnabled then
+        deviceType = "Console"
+    else
+        deviceType = "PC"
+    end
+    
+    if deviceType == "PC" then
+        local success, VIM = pcall(function()
+            return game:GetService("VirtualInputManager")
+        end)
+        if success and VIM then
+            VirtualInputManager = VIM
+            pcModeAvailable = true
+        end
+    end
+    
+    print("[Device] " .. deviceType .. " - " .. (pcModeAvailable and "Auto-click available" or "Manual mode"))
+    return deviceType
+end
+
+detectDevice()
+
+-- ========== ФУНКЦИЯ ОЖИДАНИЯ ДИАЛОГА ==========
 local function waitForDialogueToEnd(textLabel)
     if not textLabel then return end
     
@@ -82,8 +114,92 @@ local function waitForDialogueToEnd(textLabel)
     end
 end
 
--- ========== НОВАЯ ФУНКЦИЯ ДЛЯ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ЧЕРЕЗ GUI ==========
+-- ========== ЭМУЛЯЦИЯ КЛИКА ДЛЯ ПК ==========
+local function pcClick(button)
+    if not button or not pcModeAvailable then return false end
+    
+    GuiService.SelectedObject = button
+    task.wait(0.1)
+    
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+    
+    task.wait(0.1)
+    GuiService.SelectedObject = nil
+    
+    return true
+end
+
+-- ========== ЭМУЛЯЦИЯ КАСАНИЯ ДЛЯ ТЕЛЕФОНА ==========
+local function mobileTap(button)
+    if not button then return false end
+    
+    -- Получаем абсолютные координаты кнопки
+    local absPos = button.AbsolutePosition
+    local absSize = button.AbsoluteSize
+    
+    if absPos.X == 0 and absPos.Y == 0 then
+        -- Кнопка ещё не отрендерена, пробуем другой метод
+        GuiService.SelectedObject = button
+        task.wait(0.1)
+        
+        -- Имитируем касание через UserInputService
+        local centerX = absPos.X + absSize.X / 2
+        local centerY = absPos.Y + absSize.Y / 2
+        
+        if centerX > 0 and centerY > 0 then
+            local touchPos = Vector2.new(centerX, centerY)
+            
+            -- Эмулируем начало касания
+            pcall(function()
+                UserInputService:SetTouchEnabled(true)
+            end)
+            
+            -- Отправляем событие касания
+            local touchInput = Instance.new("InputObject")
+            touchInput.UserInputType = Enum.UserInputType.Touch
+            touchInput.Position = touchPos
+            touchInput.Delta = Vector2.new(0, 0)
+            
+            -- Нажатие
+            pcall(function()
+                UserInputService:FireTouchEvent(touchInput)
+            end)
+            
+            task.wait(0.1)
+            
+            -- Отпускание
+            touchInput.UserInputState = Enum.UserInputState.End
+            pcall(function()
+                UserInputService:FireTouchEvent(touchInput)
+            end)
+        end
+    else
+        -- Визуальный эффект нажатия
+        local originalSize = button.Size
+        local originalColor = button.BackgroundColor3
+        
+        button.Size = originalSize - UDim2.new(0, 4, 0, 4)
+        button.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        
+        task.wait(0.05)
+        
+        button.Size = originalSize
+        button.BackgroundColor3 = originalColor
+    end
+    
+    task.wait(0.1)
+    GuiService.SelectedObject = nil
+    
+    return true
+end
+
+-- ========== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ==========
 local function useItemThroughGUI(itemName)
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid then return false end
+    
     local tool = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
     
     if not tool then
@@ -91,93 +207,62 @@ local function useItemThroughGUI(itemName)
         return false
     end
     
-    local humanoid = character:FindFirstChild("Humanoid")
-    if not humanoid then return false end
-    
-    -- Экипируем предмет
     if tool.Parent == backpack then
         humanoid:EquipTool(tool)
         task.wait(0.5)
     end
     
     updateStatus("📦 Using " .. itemName .. "...")
+    tool:Activate()
     
-    -- СПОСОБ 1: Пытаемся использовать через холдер (ItemHolder)
-    local itemHolder = player.PlayerGui:FindFirstChild("ItemHolder")
-    if itemHolder then
-        -- Ищем кнопку использования предмета
-        local useButton = itemHolder:FindFirstChild("UseButton") or 
-                          itemHolder:FindFirstChild("ConfirmButton") or
-                          itemHolder:FindFirstChild("Use")
-        
-        if useButton and useButton:IsA("TextButton") then
-            -- Кликаем по кнопке использования
-            GuiService.SelectedObject = useButton
-            task.wait(0.2)
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-            task.wait(0.1)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-            task.wait(0.2)
-            GuiService.SelectedObject = nil
-            updateStatus("✅ " .. itemName .. " used via ItemHolder!")
-            return true
-        end
-        
-        -- Альтернатива: ищем любую кнопку в ItemHolder
-        for _, btn in ipairs(itemHolder:GetDescendants()) do
-            if btn:IsA("TextButton") and (btn.Text:lower():find("use") or btn.Text:lower():find("confirm") or btn.Text == "✔") then
-                GuiService.SelectedObject = btn
-                task.wait(0.2)
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-                task.wait(0.1)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-                task.wait(0.2)
-                GuiService.SelectedObject = nil
-                updateStatus("✅ " .. itemName .. " used!")
-                return true
-            end
-        end
+    -- Ищем GUI диалога
+    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+    if not dialogueGui then
+        dialogueGui = player.PlayerGui:WaitForChild("DialogueGui", 10)
     end
     
-    -- СПОСОБ 2: Просто активируем инструмент (если нет GUI)
-    tool:Activate()
-    task.wait(1)
-    
-    -- СПОСОБ 3: Проверяем диалог (для квестовых предметов)
-    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
     if dialogueGui then
         local frame = dialogueGui:FindFirstChild("Frame")
         if frame then
             local options = frame:FindFirstChild("Options")
             if options then
-                -- Ищем любую кнопку для подтверждения
-                for _, child in ipairs(options:GetDescendants()) do
-                    if child:IsA("TextButton") and child.Visible then
-                        -- Ждём появления текста диалога
-                        local textLabel = frame:FindFirstChildOfClass("TextLabel") or 
-                                         options:FindFirstChildOfClass("TextLabel")
+                local opt1 = options:FindFirstChild("Option1")
+                local opt2 = options:FindFirstChild("Option2")
+                
+                if opt1 and opt2 then
+                    local button = opt1:FindFirstChild("TextButton")
+                    local textLabel = opt2:FindFirstChild("TextButton") or opt2
+                    
+                    if button and textLabel then
+                        updateStatus("💬 Waiting for dialogue to complete...")
+                        waitForDialogueToEnd(textLabel)
                         
-                        if textLabel then
-                            waitForDialogueToEnd(textLabel)
+                        -- Выбираем метод клика в зависимости от устройства
+                        local clickSuccess = false
+                        
+                        if deviceType == "PC" and pcModeAvailable then
+                            clickSuccess = pcClick(button)
+                        elseif deviceType == "Mobile" then
+                            clickSuccess = mobileTap(button)
+                        else
+                            -- Fallback: просто выбираем объект
+                            GuiService.SelectedObject = button
+                            task.wait(0.2)
+                            GuiService.SelectedObject = nil
+                            clickSuccess = true
                         end
                         
-                        task.wait(0.5)
-                        GuiService.SelectedObject = child
-                        task.wait(0.2)
-                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-                        task.wait(0.1)
-                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-                        task.wait(0.2)
-                        GuiService.SelectedObject = nil
-                        updateStatus("✅ " .. itemName .. " used via Dialogue!")
-                        return true
+                        if clickSuccess then
+                            updateStatus("✅ " .. itemName .. " used successfully!")
+                            return true
+                        end
                     end
                 end
             end
         end
     end
     
-    updateStatus("⚠️ Could not use " .. itemName .. " - no UI found")
+    updateStatus("⚠️ Dialogue GUI not found for " .. itemName)
     return false
 end
 
@@ -263,18 +348,6 @@ local function triggerProximityPrompt(prompt)
     return success
 end
 
-local function equipItem(itemName)
-    local backpack = player:WaitForChild("Backpack")
-    local item = backpack:FindFirstChild(itemName)
-    
-    if item then
-        local char, _ = getCharacter()
-        item.Parent = char
-        return true
-    end
-    return false
-end
-
 local function farmItem(itemName)
     while task.wait(0.5) and ScriptActive do
         local hasItem = player.Backpack:FindFirstChild(itemName) or (player.Character and player.Character:FindFirstChild(itemName))
@@ -307,7 +380,7 @@ local function farmItem(itemName)
     end
 end
 
--- ========== ОБНОВЛЕННЫЕ ФУНКЦИИ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ==========
+-- ========== ФУНКЦИИ ДЛЯ СТРЕЛЫ И РОКАКАКИ ==========
 local function useArrow()
     updateStatus("🏹 Using Mysterious Arrow...")
     return useItemThroughGUI("Mysterious Arrow")
@@ -392,20 +465,6 @@ local function updatePlayerPositionBehind(npc, distance)
     local behindPosition = targetRoot.Position - targetRoot.CFrame.LookVector * distance
     rootPart.CFrame = CFrame.new(behindPosition)
     rootPart.CFrame = CFrame.lookAt(rootPart.Position, targetRoot.Position)
-    
-    return true
-end
-
-local function updatePlayerPositionAbove(npc, height)
-    if not npc or not npc.Parent then return false end
-    
-    local targetHead = npc:FindFirstChild("Head")
-    if not targetHead then return false end
-    
-    if not rootPart or not rootPart.Parent then return false end
-    
-    local abovePosition = targetHead.Position + Vector3.new(0, height, 0)
-    rootPart.CFrame = CFrame.new(abovePosition)
     
     return true
 end
@@ -653,7 +712,6 @@ local function startStandFarming()
                     farmItem("Rokakaka")
                 end
                 
-                -- ИСПОЛЬЗУЕМ РОКАКАКУ ЧЕРЕЗ НОВУЮ ФУНКЦИЮ
                 useRoka()
                 
                 local elapsed = 0
@@ -668,25 +726,21 @@ local function startStandFarming()
                 end
                 toggleStand()
                 
-                -- РЕСЕТ ПЕРСОНАЖА ПОСЛЕ ПОЛУЧЕНИЯ ХОРОШЕГО СТЕНДА
                 if statusText then
                     statusText.Text = "🔄 Resetting character to fix stand summon..."
                 end
                 
-                -- Убиваем персонажа
                 local humanoid = character:FindFirstChild("Humanoid")
                 if humanoid then
                     humanoid.Health = 0
                 end
                 stopAttack()
                 
-                -- Ждём респавна
                 character = player.CharacterAdded:Wait()
                 rootPart = character:WaitForChild("HumanoidRootPart")
                 RE = character:WaitForChild("RemoteEvent")
                 RF = character:WaitForChild("RemoteFunction")
                 
-                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
                 local respawnAttempts = 0
                 local respawnSuccess = false
                 
@@ -723,7 +777,6 @@ local function startStandFarming()
                     statusText.Text = "✅ Character respawned, ready to use stand!"
                 end
                 
-                -- Возвращаем название стенда
                 return currentStand
             end
         else
@@ -744,7 +797,6 @@ local function startStandFarming()
                 statusText.Text = "✨ Using arrow..."
             end
             
-            -- ИСПОЛЬЗУЕМ СТРЕЛУ ЧЕРЕЗ НОВУЮ ФУНКЦИЮ
             useArrow()
             
             local elapsed = 0
@@ -1032,7 +1084,7 @@ titleCorner.Parent = titleBar
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 1, 0)
 title.BackgroundTransparency = 1
-title.Text = "Farm Controller"
+title.Text = "Farm Controller [" .. deviceType .. "]"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
@@ -1093,7 +1145,7 @@ statusCorner.Parent = statusFrame
 statusText = Instance.new("TextLabel")
 statusText.Size = UDim2.new(1, 0, 1, 0)
 statusText.BackgroundTransparency = 1
-statusText.Text = "Status: IDLE"
+statusText.Text = "Status: IDLE [" .. deviceType .. "]"
 statusText.TextColor3 = Color3.fromRGB(200, 200, 200)
 statusText.Font = Enum.Font.Gotham
 statusText.TextSize = 12
