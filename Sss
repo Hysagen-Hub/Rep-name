@@ -1,14 +1,17 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local GuiService = game:GetService("GuiService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local rootPart = character:WaitForChild("HumanoidRootPart")
 local camera = Workspace.CurrentCamera
+local backpack = player:WaitForChild("Backpack")
 
+-- Получаем RemoteEvent и RemoteFunction для атак
 local RE = character:WaitForChild("RemoteEvent")
 local RF = character:WaitForChild("RemoteFunction")
 
@@ -37,6 +40,113 @@ local skills = {
     {Skill = "Agility III", SkillTreeType = "Character"},
     {Skill = "Worthiness", SkillTreeType = "Character"}
 }
+
+local function endDialogue(Storyline, Dialogue)
+    local args = {
+            [1] = "EndDialogue",
+            [2] = {
+                ["NPC"] = Storyline,
+                ["Option"] = "Option1",
+                ["Dialogue"] = Dialogue
+            }
+        }
+    pcall(function()
+        RE:FireServer(unpack(args))
+    end)
+end
+
+-- ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОЖИДАНИЯ ДИАЛОГА ==========
+local function waitForDialogueToEnd(textLabel)
+    if not textLabel then return end
+    
+    local lastText = ""
+    local timer = 0
+    local checkInterval = 0.2
+    local settleTime = 1.0
+    
+    while true do
+        local currentText = textLabel.Text
+        
+        if currentText ~= lastText and currentText ~= "" then
+            lastText = currentText
+            timer = 0
+        else
+            timer = timer + checkInterval
+        end
+        
+        if timer >= settleTime and currentText ~= "" then
+            break
+        end
+        
+        task.wait(checkInterval)
+    end
+end
+
+-- ========== НОВАЯ ФУНКЦИЯ ДЛЯ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ЧЕРЕЗ GUI ==========
+local function useItemThroughGUI(itemName)
+    local tool = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
+    
+    if not tool then
+        updateStatus("❌ " .. itemName .. " not found!")
+        return false
+    end
+    
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid then return false end
+    
+    if tool.Parent == backpack then
+        humanoid:EquipTool(tool)
+        task.wait(0.5)
+    end
+    
+    updateStatus("📦 Using " .. itemName .. "...")
+    tool:Activate()
+    
+    -- Ищем GUI диалога
+    local dialogueGui = player.PlayerGui:FindFirstChild("DialogueGui")
+    if not dialogueGui then
+        dialogueGui = player.PlayerGui:WaitForChild("DialogueGui", 10)
+    end
+    
+    if dialogueGui then
+        local frame = dialogueGui:FindFirstChild("Frame")
+        if frame then
+            local options = frame:FindFirstChild("Options")
+            if options then
+                local opt1 = options:FindFirstChild("Option1")
+                local opt2 = options:FindFirstChild("Option2")
+                
+                if opt1 and opt2 then
+                    local button = opt1:FindFirstChild("TextButton")
+                    local textLabel = opt2:FindFirstChild("TextButton") or opt2
+                    
+                    if button and textLabel then
+                        updateStatus("💬 Waiting for dialogue to complete...")
+                        waitForDialogueToEnd(textLabel)
+                        
+                        -- Кликаем по кнопке
+                        GuiService.SelectedObject = button
+                        task.wait(0.2)
+                        
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                        task.wait(0.1)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+                        
+                        task.wait(0.2)
+                        GuiService.SelectedObject = nil
+                        updateStatus("✅ " .. itemName .. " used successfully!")
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    
+    updateStatus("⚠️ Dialogue GUI not found for " .. itemName)
+    return false
+end
+
+-- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 local function getCharacter()
     local char = player.Character or player.CharacterAdded:Wait()
@@ -118,52 +228,6 @@ local function triggerProximityPrompt(prompt)
     return success
 end
 
-local function clickScreenCenter()
-    local screenSize = camera.ViewportSize
-    local centerX = screenSize.X / 2
-    local centerY = screenSize.Y / 2
-    
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-    task.spawn(function()
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-    end)
-end
-
-local function clickGuiButton(button)
-    if not button or not button.Visible then return false end
-    local inset = GuiService:GetGuiInset()
-    local centerX = button.AbsolutePosition.X + (button.AbsoluteSize.X / 2) + inset.X
-    local heightOffset = button.AbsoluteSize.Y * 1.4
-    local centerY = button.AbsolutePosition.Y + (button.AbsoluteSize.Y / 2) + inset.Y - heightOffset
-    
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-    task.spawn(function()
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-    end)
-    return true
-end
-
-local function findDialogueOptionButton(dialogueGui)
-    local options = dialogueGui:FindFirstChild("Options")
-    if options then
-        local option1 = options:FindFirstChild("Option1")
-        if option1 then
-            local button = option1:FindFirstChildWhichIsA("GuiButton")
-            if button and button.Visible then return button end
-        end
-    end
-    for _, child in pairs(dialogueGui:GetDescendants()) do
-        if (child:IsA("TextButton") or child:IsA("ImageButton")) and child.Visible and child.Active then
-            return child
-        end
-    end
-    return nil
-end
-
 local function equipItem(itemName)
     local backpack = player:WaitForChild("Backpack")
     local item = backpack:FindFirstChild(itemName)
@@ -208,48 +272,18 @@ local function farmItem(itemName)
     end
 end
 
-local function useItem(itemName)
-    if not equipItem(itemName) then return false end
-    task.wait(0.5)
-
-    local playerGui = player:WaitForChild("PlayerGui")
-    local dialogueGui = nil
-    while not dialogueGui and ScriptActive do
-        clickScreenCenter()
-        dialogueGui = playerGui:FindFirstChild("DialogueGui")
-        if not dialogueGui then
-            for _, gui in pairs(playerGui:GetChildren()) do
-                if gui.Name:lower():find("dialogue") then
-                    dialogueGui = gui
-                    break
-                end
-            end
-        end
-        task.wait(0.5)
-    end
-
-    local targetButton = nil
-    while not targetButton and ScriptActive do
-        targetButton = findDialogueOptionButton(dialogueGui)
-        if targetButton then
-            clickGuiButton(targetButton)
-            task.wait(0.1)
-            clickGuiButton(targetButton)
-            break
-        end
-        task.wait(0.5)
-    end
-
-    while dialogueGui and dialogueGui.Parent == playerGui and ScriptActive do
-        targetButton = findDialogueOptionButton(dialogueGui)
-        if targetButton then
-            clickGuiButton(targetButton)
-        end
-        task.wait(0.5)
-    end
-
-    task.wait(5)
+-- ========== ОБНОВЛЕННЫЕ ФУНКЦИИ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ ==========
+local function useArrow()
+    updateStatus("🏹 Using Mysterious Arrow...")
+    return useItemThroughGUI("Mysterious Arrow")
 end
+
+local function useRoka()
+    updateStatus("🍐 Using Rokakaka...")
+    return useItemThroughGUI("Rokakaka")
+end
+
+-- ========== ФУНКЦИИ АТАКИ ==========
 
 local function startAttack()
     if isAttacking then return end
@@ -277,6 +311,8 @@ local function stopAttack()
     RE:FireServer("HoldAttack", attackTable)
 end
 
+-- ========== ФУНКЦИИ СТЕНДА ==========
+
 local function toggleStand()
     stopAttack()
     task.wait(0.2)
@@ -303,19 +339,6 @@ local function getStandMorph()
     return nil
 end
 
-local function attachStandToTarget(target)
-    local standMorph = getStandMorph()
-    if not standMorph or not target then return end
-    
-    local targetRoot = target:FindFirstChild("HumanoidRootPart")
-    if not targetRoot then return end
-    
-    local standPosition = targetRoot.Position - targetRoot.CFrame.LookVector * 3
-    local standCFrame = CFrame.new(standPosition)
-    
-    standMorph:SetPrimaryPartCFrame(standCFrame)
-end
-
 local function updateStatus(msg)
     print("[Mista]", msg)
     if statusText then
@@ -332,7 +355,6 @@ local function updatePlayerPositionBehind(npc, distance)
     if not rootPart or not rootPart.Parent then return false end
     
     local behindPosition = targetRoot.Position - targetRoot.CFrame.LookVector * distance
-    
     rootPart.CFrame = CFrame.new(behindPosition)
     rootPart.CFrame = CFrame.lookAt(rootPart.Position, targetRoot.Position)
     
@@ -348,7 +370,6 @@ local function updatePlayerPositionAbove(npc, height)
     if not rootPart or not rootPart.Parent then return false end
     
     local abovePosition = targetHead.Position + Vector3.new(0, height, 0)
-    
     rootPart.CFrame = CFrame.new(abovePosition)
     
     return true
@@ -367,6 +388,8 @@ local function stopStandFarm()
     stopHeartbeat()
     stopAttack()
 end
+
+-- ========== ФУНКЦИИ ФАРМА ==========
 
 local function killLogicNormal(npc)
     if not npc or not npc.Parent then return false end
@@ -534,7 +557,7 @@ local function farmNPCs(npcName, neededCount)
     while killedCount < neededCount and ScriptActive and not standFarmMode do
         if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
             if statusText then
-                statusText.Text = "💀 Ожидание респавна..."
+                statusText.Text = "💀 Waiting for respawn..."
             end
             character = player.CharacterAdded:Wait()
             rootPart = character:WaitForChild("HumanoidRootPart")
@@ -567,10 +590,136 @@ local function farmNPCs(npcName, neededCount)
             task.wait(0.5)
         else
             if statusText then
-                statusText.Text = "⏳ Ожидание спавна: " .. npcName
+                statusText.Text = "⏳ Waiting for spawn: " .. npcName
             end
             task.wait(3)
         end
+    end
+end
+
+local function startStandFarming()
+    while ScriptActive do
+        local stats = player:FindFirstChild("PlayerStats")
+        if not stats then task.wait(2) continue end
+        
+        local standVal = stats:FindFirstChild("Stand")
+        if not standVal then task.wait(2) continue end
+        
+        local currentStand = standVal.Value
+
+        if currentStand ~= "None" then
+            if unwantedStands[currentStand] then
+                if statusText then
+                    statusText.Text = "🔄 Bad stand, resetting..."
+                end
+                local hasRoka = player.Backpack:FindFirstChild("Rokakaka") or (player.Character and player.Character:FindFirstChild("Rokakaka"))
+                
+                if not hasRoka then
+                    farmItem("Rokakaka")
+                end
+                
+                -- ИСПОЛЬЗУЕМ РОКАКАКУ ЧЕРЕЗ НОВУЮ ФУНКЦИЮ
+                useRoka()
+                
+                local elapsed = 0
+                while standVal.Value ~= "None" and elapsed < 20 and ScriptActive do
+                    task.wait(1)
+                    elapsed = elapsed + 1
+                end
+                task.wait(4)
+            else
+                if statusText then
+                    statusText.Text = "✅ Good stand: " .. currentStand
+                end
+                toggleStand()
+                
+                -- РЕСЕТ ПЕРСОНАЖА ПОСЛЕ ПОЛУЧЕНИЯ ХОРОШЕГО СТЕНДА
+                if statusText then
+                    statusText.Text = "🔄 Resetting character to fix stand summon..."
+                end
+                
+                -- Убиваем персонажа
+                local humanoid = character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.Health = 0
+                end
+                stopAttack()
+                
+                -- Ждём респавна
+                character = player.CharacterAdded:Wait()
+                rootPart = character:WaitForChild("HumanoidRootPart")
+                RE = character:WaitForChild("RemoteEvent")
+                RF = character:WaitForChild("RemoteFunction")
+                
+                -- ПОСЛЕ РЕСПАВНА - БЕСКОНЕЧНЫЕ ПОПЫТКИ ПРИЗВАТЬ СТЕНД
+                local respawnAttempts = 0
+                local respawnSuccess = false
+                
+                while not respawnSuccess and ScriptActive do
+                    respawnAttempts = respawnAttempts + 1
+                    if statusText then
+                        statusText.Text = "🔄 Summoning stand after respawn (attempt " .. respawnAttempts .. ")..."
+                    end
+                    
+                    toggleStand()
+                    task.wait(2)
+                    
+                    if hasStand() then
+                        respawnSuccess = true
+                        if statusText then
+                            statusText.Text = "✅ Stand summoned successfully after respawn!"
+                        end
+                    else
+                        if statusText then
+                            statusText.Text = "⚠️ Failed to summon after respawn, retrying..."
+                        end
+                        task.wait(1)
+                    end
+                end
+                
+                if not respawnSuccess then
+                    if statusText then
+                        statusText.Text = "❌ Cannot summon stand after respawn, giving up..."
+                    end
+                    return nil
+                end
+                
+                if statusText then
+                    statusText.Text = "✅ Character respawned, ready to use stand!"
+                end
+                
+                -- Возвращаем название стенда
+                return currentStand
+            end
+        else
+            if statusText then
+                statusText.Text = "📚 Learning skills..."
+            end
+            learnSkills()
+            
+            local hasArrow = player.Backpack:FindFirstChild("Mysterious Arrow") or (player.Character and player.Character:FindFirstChild("Mysterious Arrow"))
+            
+            if not hasArrow then
+                if statusText then
+                    statusText.Text = "🏹 Farming arrow..."
+                end
+                farmItem("Mysterious Arrow")
+            end
+            if statusText then
+                statusText.Text = "✨ Using arrow..."
+            end
+            
+            -- ИСПОЛЬЗУЕМ СТРЕЛУ ЧЕРЕЗ НОВУЮ ФУНКЦИЮ
+            useArrow()
+            
+            local elapsed = 0
+            while standVal.Value == "None" and elapsed < 30 and ScriptActive do
+                task.wait(1)
+                elapsed = elapsed + 1
+            end
+            task.wait(2)
+        end
+        task.wait(2)
     end
 end
 
@@ -759,222 +908,58 @@ local function farmWithStand(npcName, neededCount)
     end
 end
 
--- НОВАЯ ФУНКЦИЯ takeQuest
-local function takeQuest(arg1)
-    if not ScriptActive then return false end
-    
-    stopAttack()
-    task.wait(0.2)
-    
-    if statusText then
-        statusText.Text = "📜 Taking quest from " .. arg1["NPC"]
-    end
-    
-    local args = {
-        [1] = "EndDialogue",
-        [2] = arg1
-    }
-    
-    game:GetService("Players").LocalPlayer.Character.RemoteEvent:FireServer(unpack(args))
-    
-    task.wait(2)
-    
-    if statusText then
-        statusText.Text = "✅ Quest taken from " .. arg1["NPC"]
-    end
-    
-    return true
-end
-
-local function startStandFarming()
-    while ScriptActive do
-        local stats = player:FindFirstChild("PlayerStats")
-        if not stats then task.wait(2) continue end
-        
-        local standVal = stats:FindFirstChild("Stand")
-        if not standVal then task.wait(2) continue end
-        
-        local currentStand = standVal.Value
-
-        if currentStand ~= "None" then
-            if unwantedStands[currentStand] then
-                if statusText then
-                    statusText.Text = "🔄 Bad stand, resetting..."
-                end
-                local hasRoka = player.Backpack:FindFirstChild("Rokakaka") or (player.Character and player.Character:FindFirstChild("Rokakaka"))
-                
-                if not hasRoka then
-                    farmItem("Rokakaka")
-                end
-                useItem("Rokakaka")
-                
-                local elapsed = 0
-                while standVal.Value ~= "None" and elapsed < 20 and ScriptActive do
-                    task.wait(1)
-                    elapsed = elapsed + 1
-                end
-                task.wait(4)
-            else
-                if statusText then
-                    statusText.Text = "✅ Good stand: " .. currentStand
-                end
-                toggleStand()
-                
-                if statusText then
-                    statusText.Text = "🔄 Resetting character to fix stand summon..."
-                end
-                
-                local humanoid = character:FindFirstChild("Humanoid")
-                if humanoid then
-                    humanoid.Health = 0
-                end
-                stopAttack()
-                
-                character = player.CharacterAdded:Wait()
-                rootPart = character:WaitForChild("HumanoidRootPart")
-                RE = character:WaitForChild("RemoteEvent")
-                RF = character:WaitForChild("RemoteFunction")
-                
-                local respawnAttempts = 0
-                local respawnSuccess = false
-                
-                while not respawnSuccess and ScriptActive do
-                    respawnAttempts = respawnAttempts + 1
-                    if statusText then
-                        statusText.Text = "🔄 Summoning stand after respawn (attempt " .. respawnAttempts .. ")..."
-                    end
-                    
-                    toggleStand()
-                    task.wait(2)
-                    
-                    if hasStand() then
-                        respawnSuccess = true
-                        if statusText then
-                            statusText.Text = "✅ Stand summoned successfully after respawn!"
-                        end
-                    else
-                        if statusText then
-                            statusText.Text = "⚠️ Failed to summon after respawn, retrying..."
-                        end
-                        task.wait(1)
-                    end
-                end
-                
-                if not respawnSuccess then
-                    if statusText then
-                        statusText.Text = "❌ Cannot summon stand after respawn, giving up..."
-                    end
-                    return nil
-                end
-                
-                if statusText then
-                    statusText.Text = "✅ Character respawned, ready to use stand!"
-                end
-                
-                return currentStand
-            end
-        else
-            if statusText then
-                statusText.Text = "📚 Learning skills..."
-            end
-            learnSkills()
-            
-            local hasArrow = player.Backpack:FindFirstChild("Mysterious Arrow") or (player.Character and player.Character:FindFirstChild("Mysterious Arrow"))
-            
-            if not hasArrow then
-                if statusText then
-                    statusText.Text = "🏹 Farming arrow..."
-                end
-                farmItem("Mysterious Arrow")
-            end
-            if statusText then
-                statusText.Text = "✨ Using arrow..."
-            end
-            useItem("Mysterious Arrow")
-            
-            local elapsed = 0
-            while standVal.Value == "None" and elapsed < 30 and ScriptActive do
-                task.wait(1)
-                elapsed = elapsed + 1
-            end
-            task.wait(2)
-        end
-        task.wait(2)
-    end
-end
+-- ========== ОСНОВНАЯ ЛОГИКА ==========
 
 local function myFarmLogic()
     local prestige = getPrestige()
+    
     if prestige == 0 then
-        takeQuest({
-            ["NPC"] = "Giorno",
-            ["Option"] = "Option2",
-            ["Dialogue"] = "Dialogue3"
-        })
+        endDialogue("Storyline #1", "Dialogue2")
+        task.wait(0.1)
         
         farmNPCs("Security Guard", 5)
         
-        local stand = startStandFarming()
+        local stand = nil
+        while not stand and ScriptActive do
+            stand = startStandFarming()
+            task.wait(1)
+        end
         
         if stand and not unwantedStands[stand] then
             if statusText then
                 statusText.Text = "🎭 Stand mode activated for: " .. stand
             end
+            endDialogue("Storyline #1", "Dialogue3")
+            task.wait(0.1)
             
-            takeQuest({
-                ["NPC"] = "Giorno",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
+            endDialogue("Storyline #2")
+            task.wait(0.1)
             
-            takeQuest({
-                ["NPC"] = "Koichi",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
-            
-            takeQuest({
-                ["NPC"] = "Giorno",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
+            endDialogue("Storyline #3")
+            task.wait(0.1)
             
             farmWithStand("Leaky Eye Luca", 1)
             
-            takeQuest({
-                ["NPC"] = "Giorno",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
+            endDialogue("Storyline #3")
+            task.wait(0.1)
             
             farmWithStand("Bucciarati", 1)
-
-            takeQuest({
-                ["NPC"] = "Bucciarati",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
             
-            takeQuest({
-                ["NPC"] = "Giorno",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
+            endDialogue("Storyline #4")
+            task.wait(0.1)
             
-            takeQuest({
-                ["NPC"] = "Fugo",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
-
-            takeQuest({
-                ["NPC"] = "Mista",
-                ["Option"] = "Option2",
-                ["Dialogue"] = "Dialogue3"
-            })
+            endDialogue("Storyline #5")
+            task.wait(0.1)
+            
+            endDialogue("Storyline #6")
+            task.wait(0.1)
+            endDialogue("Storyline #7")
+            task.wait(0.1)
         end
     end
 end
+
+-- ========== СОЗДАНИЕ GUI ==========
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "FarmGUI"
@@ -1103,6 +1088,8 @@ UserInputService.InputChanged:Connect(function(input)
         mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
+
+-- ========== УПРАВЛЕНИЕ ФАРМОМ ==========
 
 local function stopFarming()
     ScriptActive = false
