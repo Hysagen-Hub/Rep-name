@@ -20,9 +20,9 @@ local stopRequested = false
 local currentHWID = (gethwid and gethwid()) or (RbxAnalyticsService and RbxAnalyticsService:GetClientId()) or tostring(player.UserId)
 
 local validKeys = {
-    ["KEY_1"] = false,
-    ["KEY_2"] = false,
-    ["KEY_3"] = false
+    ["KEY_1"] = "Username1",
+    ["KEY_2"] = "Username2",
+    ["KEY_3"] = "Username3"
 }
 
 local badStands = {
@@ -1271,25 +1271,13 @@ submitCorner.Parent = submitBtn
 
 submitBtn.MouseButton1Click:Connect(function()
     local inputKey = keyInput.Text
-    local boundHWID = validKeys[inputKey]
+    local allowedUser = validKeys[inputKey]
     
-    if boundHWID ~= nil then
-        if boundHWID == false then
-            validKeys[inputKey] = currentHWID
-            keyGui:Destroy()
-            createMainGUI()
-        elseif boundHWID == currentHWID then
-            keyGui:Destroy()
-            createMainGUI()
-        else
-            submitBtn.Text = "HWID MISMATCH!"
-            submitBtn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
-            task.wait(2)
-            submitBtn.Text = "CHECK KEY"
-            submitBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
-        end
+    if allowedUser and allowedUser == player.Name then
+        keyGui:Destroy()
+        createMainGUI()
     else
-        submitBtn.Text = "INVALID KEY!"
+        submitBtn.Text = "INVALID OR WRONG USER!"
         submitBtn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
         task.wait(2)
         submitBtn.Text = "CHECK KEY"
