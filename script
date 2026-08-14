@@ -2,8 +2,6 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 
@@ -24,219 +22,1348 @@ local function SetupDistanceBypass()
         local oldMeta = getrawmetatable(Vector3.new())
         local oldIndex = oldMeta.__index
         setreadonly(oldMeta, false)
-        
         oldMeta.__index = function(self, key)
             if key:lower() == "magnitude" and getcallingscript() and getcallingscript().Name == "ItemSpawn" then
                 return 0
             end
             return oldIndex(self, key)
         end
-        
         setreadonly(oldMeta, true)
     end)
 end
-
 SetupDistanceBypass()
 
-_G.ItemESP_Items = _G.ItemESP_Items or {}
-_G.ItemESP_Active = _G.ItemESP_Active or false
-local espInstance = nil
-
-_G.ItemFarm_Items = _G.ItemFarm_Items or {}
-local itemFarmTable = _G.ItemFarm_Items
-
-local isFarmingItems = false
-local farmThread = nil
-local selectedItems = {}
 local ALL_ITEMS = {
-    'Mysterious Arrow',
-    'Pure Rokakaka',
-    'Rokakaka',
-    'Lucky Arrow',
-    'Lucky Stone Mask',
-    "Rib Cage of The Saint's Corpse",
-    'Steel Ball',
-    "Zeppelin's Headband",
-    'Ancient Scroll',
-    "Quinton's Glove",
-    'Stone Mask',
-    'gold coin',
-    'Diamond',
-    "Dio's Diary"
+    'Mysterious Arrow', 'Pure Rokakaka', 'Clackers', 'Rokakaka', 'Lucky Arrow',
+    'Lucky Stone Mask', "Rib Cage of The Saint's Corpse", 'Steel Ball',
+    "Zeppeli's Hat", 'Ancient Scroll', "Quinton's Glove", 'Stone Mask',
+    'Gold Coin', 'Diamond', "Dio's Diary"
 }
+
+local ARROW_STANDS = {
+    'Whitesnake', 'Stone Free', 'Star Platinum', 'The World', 'Red Hot Chili Pepper',
+    'Crazy Diamond', 'Killer Queen', 'Gold Experience', 'King Crimson', 'Anubis',
+    'Silver Chariot', 'The Hand', 'Purple Haze', 'Cream', 'Hierophant Green',
+    "Magician's Red", 'White Album', 'Aerosmith', 'Six Pistols', 'Sticky Fingers',
+    'Hermit Purple', 'Mr. President', 'Beach Boy'
+}
+
+local RIB_STANDS = {
+    'Scary Monsters', 'The World Alternate Universe', 'D4C', 'Soft & Wet'
+}
+
+local ALL_STANDS = {}
+for _, stand in ipairs(ARROW_STANDS) do table.insert(ALL_STANDS, stand) end
+for _, stand in ipairs(RIB_STANDS) do table.insert(ALL_STANDS, stand) end
+
+local ACTIVATION_DISTANCE = 5
+local wasAnchored = false
+
+local itemTracker = {}
+local espTracker = {}
+local selectedItems = {}
+local selectedTargetStand = nil
+local isFarmingItems = false
+local isStandFarming = false
+local isMainFarming = false
+local farmThread = nil
+local standFarmThread = nil
+local mainFarmThread = nil
+local espInstance = nil
+local mainActive = false
+local stopRequested = false
+local attacking = false
+local attackThread = nil
+local standMode = false
+local currentTarget = nil
+local heartbeatConn = nil
+
+_G.ItemESP_Active = false
+
+local farmItemBtn = nil
+local standFarmBtn = nil
+local mainFarmBtn = nil
+local itemSelectorOpen = false
+local itemSelectorBtn = nil
+local itemSelectorFrame = nil
+local selectorCount = nil
 
 for _, item in ipairs(ALL_ITEMS) do
     selectedItems[item] = true
 end
 
-local ACTIVATION_DISTANCE = 5
-local wasAnchored = false
+local trackedItems = {}
 
-local function RegisterItemForFarm(item)
-    if item.ClassName ~= "ProximityPrompt" then
-        return
-    end
-    
-    if not item.Parent:FindFirstChild("PointLight", true) then
-        return
-    end
-    
-    local itemName = item.ObjectText or "Unknown"
-    
-    if not itemFarmTable[itemName] then
-        itemFarmTable[itemName] = {}
-    end
-    
-    table.insert(itemFarmTable[itemName], item)
-    
-    item.AncestryChanged:Connect(function()
-        if not item:IsDescendantOf(workspace) then
-            if itemFarmTable[itemName] then
-                for i, v in pairs(itemFarmTable[itemName]) do
-                    if v == item then
-                        table.remove(itemFarmTable[itemName], i)
-                        break
-                    end
-                end
-                if #itemFarmTable[itemName] == 0 then
-                    itemFarmTable[itemName] = nil
-                end
-            end
-        end
-    end)
-end
-
-local function InitItemTrackerForFarm()
-    itemFarmTable = {}
-    _G.ItemFarm_Items = itemFarmTable
-    
-    local itemsContainer = workspace:FindFirstChild("Item_Spawns")
-    if itemsContainer then
-        itemsContainer = itemsContainer:FindFirstChild("Items")
-        if itemsContainer then
-            for _, descendant in ipairs(itemsContainer:GetDescendants()) do
-                if descendant.ClassName == "ProximityPrompt" then
-                    RegisterItemForFarm(descendant)
-                end
-            end
-            
-            if not getgenv().farm_item_added_conn then
-                getgenv().farm_item_added_conn = itemsContainer.DescendantAdded:Connect(function(descendant)
-                    if descendant.ClassName == "ProximityPrompt" then
-                        RegisterItemForFarm(descendant)
-                    end
-                end)
-            end
-            
-            if not getgenv().farm_item_removed_conn then
-                getgenv().farm_item_removed_conn = itemsContainer.DescendantRemoving:Connect(function(descendant)
-                    if descendant.ClassName == "ProximityPrompt" then
-                        local itemName = descendant.ObjectText or "Unknown"
-                        if itemFarmTable[itemName] then
-                            for i, v in pairs(itemFarmTable[itemName]) do
-                                if v == descendant then
-                                    table.remove(itemFarmTable[itemName], i)
-                                    break
-                                end
-                            end
-                            if #itemFarmTable[itemName] == 0 then
-                                itemFarmTable[itemName] = nil
-                            end
-                        end
-                    end
-                end)
-            end
-        end
-    end
-end
-
-InitItemTrackerForFarm()
-
-local function updateCharacterForItems()
+local function updateCharacter()
     local char = player.Character
     if not char then return nil, nil, nil end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local backpack = player:FindFirstChild("Backpack")
-    return char, root, backpack
+    return char, char:FindFirstChild("HumanoidRootPart"), player:FindFirstChild("Backpack")
 end
 
-local function travelToPositionAnchored(pos)
-    local char, rootPart = updateCharacterForItems()
-    if not rootPart or not rootPart.Parent then 
-        return false 
-    end
+local function getItemPosition(model)
+    if not model then return nil end
+    local part = model:IsA("BasePart") and model or model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
+    return part and part.Position or nil
+end
+
+local function getDistanceToItem(model)
+    local _, rootPart = updateCharacter()
+    if not rootPart or not rootPart.Parent then return math.huge end
+    local pos = getItemPosition(model)
+    return pos and (rootPart.Position - pos).Magnitude or math.huge
+end
+
+local function travelToPositionSmooth(pos, speed)
+    speed = speed or 50
+    local _, rootPart = updateCharacter()
+    if not rootPart or not rootPart.Parent then return false end
+    
+    local distance = (rootPart.Position - pos).Magnitude
+    if distance < ACTIVATION_DISTANCE then return true end
     
     wasAnchored = rootPart.Anchored
     rootPart.Anchored = true
     
     local success = false
-    
     pcall(function()
         local start = rootPart.Position
         local dir = (pos - start)
         local dist = dir.Magnitude
-        
-        if dist < ACTIVATION_DISTANCE then
-            success = true
-            return
-        end
-        
-        local steps = math.max(1, math.ceil(dist / 50))
+        local steps = math.max(1, math.ceil(dist / speed))
         local stepVec = dir / steps
         
         for i = 1, steps do
-            if not isFarmingItems or not rootPart or not rootPart.Parent then 
-                return 
+            if not mainActive and not isFarmingItems then return end
+            if not rootPart or not rootPart.Parent then return end
+            
+            local newPos = rootPart.Position + stepVec
+            local remaining = (pos - newPos).Magnitude
+            
+            if remaining < 5 then
+                rootPart.CFrame = CFrame.new(pos)
+                break
             end
-            rootPart.CFrame = CFrame.new(rootPart.Position + stepVec)
-            task.wait(0.05)
+            
+            rootPart.CFrame = CFrame.new(newPos)
+            task.wait()
         end
+        
         rootPart.CFrame = CFrame.new(pos)
-        task.wait(0.05)
+        task.wait(0.1)
         success = true
     end)
     
     rootPart.Anchored = wasAnchored
     wasAnchored = false
-    
     return success
 end
 
-local function RegisterItemForESP(item)
-    if item.ClassName ~= "ProximityPrompt" then
-        return
+local function getItemContainer()
+    local spawns = workspace:FindFirstChild("Item_Spawns")
+    if spawns then
+        return spawns:FindFirstChild("Items")
+    end
+    return nil
+end
+
+local function setupTracker(tracker)
+    local container = getItemContainer()
+    if not container then return end
+    
+    local function addItem(item)
+        if item.ClassName ~= "ProximityPrompt" then return end
+        if not item.Parent:FindFirstChild("PointLight", true) then return end
+        
+        local itemName = item.ObjectText or "Unknown"
+        if not tracker[itemName] then tracker[itemName] = {} end
+        
+        for _, v in pairs(tracker[itemName]) do
+            if v == item then return end
+        end
+        
+        table.insert(tracker[itemName], item)
+        
+        local key = tostring(item)
+        if not trackedItems[key] then
+            trackedItems[key] = true
+            item.AncestryChanged:Connect(function()
+                if not item:IsDescendantOf(workspace) then
+                    if tracker[itemName] then
+                        for i, v in pairs(tracker[itemName]) do
+                            if v == item then
+                                table.remove(tracker[itemName], i)
+                                break
+                            end
+                        end
+                        if #tracker[itemName] == 0 then tracker[itemName] = nil end
+                    end
+                    trackedItems[key] = nil
+                end
+            end)
+        end
     end
     
-    local itemName = item.ObjectText or "Unknown"
-    
-    if not _G.ItemESP_Items[itemName] then
-        _G.ItemESP_Items[itemName] = {}
+    for _, descendant in ipairs(container:GetDescendants()) do
+        if descendant.ClassName == "ProximityPrompt" then
+            addItem(descendant)
+        end
     end
     
-    table.insert(_G.ItemESP_Items[itemName], item)
+    container.DescendantAdded:Connect(function(desc)
+        if desc.ClassName == "ProximityPrompt" then
+            addItem(desc)
+        end
+    end)
     
-    item.AncestryChanged:Connect(function()
-        if not item:IsDescendantOf(workspace) then
-            if _G.ItemESP_Items[itemName] then
-                for i, v in pairs(_G.ItemESP_Items[itemName]) do
-                    if v == item then
-                        table.remove(_G.ItemESP_Items[itemName], i)
+    container.DescendantRemoving:Connect(function(desc)
+        if desc.ClassName == "ProximityPrompt" then
+            local itemName = desc.ObjectText or "Unknown"
+            if tracker[itemName] then
+                for i, v in pairs(tracker[itemName]) do
+                    if v == desc then
+                        table.remove(tracker[itemName], i)
                         break
                     end
                 end
-                if #_G.ItemESP_Items[itemName] == 0 then
-                    _G.ItemESP_Items[itemName] = nil
-                end
+                if #tracker[itemName] == 0 then tracker[itemName] = nil end
             end
         end
     end)
 end
 
+local function refreshTrackers()
+    trackedItems = {}
+    itemTracker = {}
+    espTracker = {}
+    setupTracker(itemTracker)
+    setupTracker(espTracker)
+end
+
+local function getSpawnedItems()
+    local available = {}
+    for name, prompts in pairs(itemTracker) do
+        if selectedItems[name] then
+            for _, prompt in ipairs(prompts) do
+                if prompt and prompt:IsDescendantOf(workspace) then
+                    local parent = prompt.Parent
+                    if parent and parent:IsDescendantOf(workspace) then
+                        table.insert(available, {Name = name, Prompt = prompt, Model = parent})
+                    end
+                end
+            end
+        end
+    end
+    return available
+end
+
+local function activateRemoteEvents(model, prompt)
+    if not model or not model:IsDescendantOf(workspace) then return false end
+    local remoteEvents = {}
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("RemoteEvent") then table.insert(remoteEvents, desc) end
+    end
+    if #remoteEvents > 0 then
+        for _, remote in ipairs(remoteEvents) do
+            if not isFarmingItems or not model.Parent then break end
+            for i = 1, 3 do
+                pcall(function()
+                    remote:FireServer()
+                    remote:FireServer(model)
+                    remote:FireServer(prompt)
+                end)
+                task.wait(0.15)
+            end
+        end
+        return true
+    end
+    return false
+end
+
+local function collectItem(model, name, prompt)
+    if not model or not model:IsDescendantOf(workspace) then return false end
+    local distance = getDistanceToItem(model)
+    if distance > ACTIVATION_DISTANCE then
+        local part = model:IsA("BasePart") and model or model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
+        if part then
+            if travelToPositionSmooth(part.Position + Vector3.new(0, 1, 0), 40) then
+                task.wait(0.3)
+                if getDistanceToItem(model) <= ACTIVATION_DISTANCE then
+                    return activateRemoteEvents(model, prompt)
+                end
+            end
+        end
+        return false
+    else
+        return activateRemoteEvents(model, prompt)
+    end
+end
+
+local function startItemFarmLoop()
+    while isFarmingItems do
+        if isStandFarming and selectedTargetStand then
+            local stats = player:FindFirstChild("PlayerStats")
+            if stats and stats:FindFirstChild("Stand") then
+                if stats.Stand.Value == selectedTargetStand then
+                    isFarmingItems = false
+                    if farmThread then task.cancel(farmThread) farmThread = nil end
+                    if farmItemBtn then
+                        farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+                        farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+                    end
+                    break
+                end
+            end
+        end
+        
+        local char, rootPart = updateCharacter()
+        if not char or not rootPart then task.wait(1) continue end
+        
+        local hum = char:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then
+            player.CharacterAdded:Wait()
+            task.wait(1)
+            continue
+        end
+        
+        local items = getSpawnedItems()
+        if #items == 0 then
+            task.wait(1.5)
+            continue
+        end
+        
+        table.sort(items, function(a, b)
+            return getDistanceToItem(a.Model) < getDistanceToItem(b.Model)
+        end)
+        
+        for _, item in ipairs(items) do
+            if not isFarmingItems then break end
+            collectItem(item.Model, item.Name, item.Prompt)
+            task.wait(0.3)
+        end
+        task.wait(0.5)
+    end
+end
+
+local function toggleItemFarm()
+    local hasSelected = false
+    for _, selected in pairs(selectedItems) do
+        if selected then hasSelected = true break end
+    end
+    if not hasSelected then return false end
+    
+    isFarmingItems = not isFarmingItems
+    if isFarmingItems then
+        farmThread = task.spawn(startItemFarmLoop)
+    else
+        if farmThread then task.cancel(farmThread) farmThread = nil end
+    end
+    return true
+end
+
+local function stopItemFarm()
+    isFarmingItems = false
+    if farmThread then task.cancel(farmThread) farmThread = nil end
+    if farmItemBtn then
+        farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+        farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    end
+end
+
+local function waitForOptions(dialogue, timeout)
+    timeout = timeout or 5
+    local start = os.clock()
+    while os.clock() - start < timeout do
+        if not dialogue or not dialogue.Parent then return nil end
+        local frame = dialogue:FindFirstChild("Frame")
+        local options = frame and frame:FindFirstChild("Options")
+        if options then
+            local buttons = {}
+            for _, child in ipairs(options:GetChildren()) do
+                if child.Name:match("Option%d+") then
+                    local btn = child:FindFirstChild("TextButton")
+                    if btn and btn.Visible and btn.Active then
+                        table.insert(buttons, btn)
+                    end
+                end
+            end
+            if #buttons > 0 then return buttons end
+        end
+        task.wait(0.05)
+    end
+    return nil
+end
+
+local function pressButton(button)
+    if not button or not button.Parent then return false end
+    return pcall(function()
+        local connections = getconnections(button.MouseButton1Click)
+        if connections and #connections > 0 then
+            local func = connections[1].Function
+            local info = debug.getinfo(func)
+            for i = 1, info.nups do
+                if debug.getupvalue(func, i) == "Option1" then
+                    debug.setupvalue(func, i, true)
+                    break
+                end
+            end
+            func()
+        end
+    end)
+end
+
+local function useItemWithGUI(itemName)
+    local char, _, backpack = updateCharacter()
+    if not char or not backpack then return false end
+    local tool = char:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
+    if not tool then return false end
+    
+    local humanoid = char:FindFirstChild("Humanoid")
+    if humanoid and tool.Parent == backpack then
+        humanoid:EquipTool(tool)
+        task.wait(0.5)
+    end
+    
+    tool:Activate()
+    
+    local dialogue
+    for _ = 1, 20 do
+        dialogue = player.PlayerGui:FindFirstChild("DialogueGui")
+        if dialogue then break end
+        task.wait(0.1)
+    end
+    if not dialogue then return false end
+    
+    local buttons = waitForOptions(dialogue, 10)
+    if not buttons or #buttons == 0 then return false end
+    
+    while dialogue and dialogue.Parent do
+        local currentButtons = waitForOptions(dialogue, 1)
+        if currentButtons then
+            for _, btn in ipairs(currentButtons) do
+                if btn and btn.Parent and btn.Visible and btn.Active then
+                    pressButton(btn)
+                    task.wait(0.3)
+                    if not dialogue.Parent then break end
+                end
+            end
+        else
+            task.wait(0.2)
+        end
+    end
+    task.wait(1)
+    return true
+end
+
+local function learnWorthiness()
+    local RF = player.Character and player.Character:FindFirstChild("RemoteFunction")
+    if RF then
+        pcall(function()
+            RF:InvokeServer("LearnSkill", {Skill = "Worthiness", SkillTreeType = "Character"})
+        end)
+    end
+end
+
+local function farmSpecificItem(itemName, timeout)
+    timeout = timeout or 30
+    local wasFarming = isFarmingItems
+    isFarmingItems = true
+    
+    local oldSelection = {}
+    for item, selected in pairs(selectedItems) do
+        oldSelection[item] = selected
+        selectedItems[item] = (item == itemName)
+    end
+    
+    local tempThread = task.spawn(startItemFarmLoop)
+    local startTime = os.clock()
+    while os.clock() - startTime < timeout do
+        local char, _, backpack = updateCharacter()
+        if (backpack and backpack:FindFirstChild(itemName)) or (char and char:FindFirstChild(itemName)) then
+            break
+        end
+        task.wait(0.5)
+    end
+    
+    isFarmingItems = wasFarming
+    for item, selected in pairs(oldSelection) do selectedItems[item] = selected end
+    task.cancel(tempThread)
+    
+    local char, _, backpack = updateCharacter()
+    return (backpack and backpack:FindFirstChild(itemName)) or (char and char:FindFirstChild(itemName))
+end
+
+local function startStandFarmLoop()
+    while isStandFarming do
+        if not selectedTargetStand then
+            isStandFarming = false
+            if standFarmBtn then
+                standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+            end
+            break
+        end
+
+        local stats = player:FindFirstChild("PlayerStats")
+        if not stats or not stats:FindFirstChild("Stand") then
+            task.wait(1)
+            continue
+        end
+
+        local currentStand = stats.Stand.Value
+        if currentStand == selectedTargetStand then
+            isStandFarming = false
+            if standFarmBtn then
+                standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+            end
+            if isFarmingItems then stopItemFarm() end
+            break
+        end
+
+        local char, _, backpack = updateCharacter()
+        if currentStand ~= "None" then
+            local hasRoka = (backpack and backpack:FindFirstChild("Rokakaka")) or (char and char:FindFirstChild("Rokakaka"))
+            if not hasRoka then
+                farmSpecificItem("Rokakaka")
+                if stats.Stand.Value == selectedTargetStand then
+                    isStandFarming = false
+                    if standFarmBtn then
+                        standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                        standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+                    end
+                    if isFarmingItems then stopItemFarm() end
+                    break
+                end
+            end
+            useItemWithGUI("Rokakaka")
+            task.wait(1.5)
+        else
+            learnWorthiness()
+            task.wait(0.3)
+
+            local itemToUse = nil
+            if table.find(ARROW_STANDS, selectedTargetStand) then
+                itemToUse = "Mysterious Arrow"
+            elseif table.find(RIB_STANDS, selectedTargetStand) then
+                itemToUse = "Rib Cage of The Saint's Corpse"
+            end
+
+            if itemToUse then
+                local hasItem = (backpack and backpack:FindFirstChild(itemToUse)) or (char and char:FindFirstChild(itemToUse))
+                if not hasItem then
+                    farmSpecificItem(itemToUse)
+                    if stats.Stand.Value == selectedTargetStand then
+                        isStandFarming = false
+                        if standFarmBtn then
+                            standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                            standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+                        end
+                        if isFarmingItems then stopItemFarm() end
+                        break
+                    end
+                end
+                useItemWithGUI(itemToUse)
+                task.wait(1.5)
+            else
+                task.wait(1)
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+local badStands = {
+    ["Six Pistols"] = true, ["Mr. President"] = true, ["Hermit Purple"] = true,
+    ["Anubis"] = true, ["Aerosmith"] = true, ["White Album"] = true, ["Beach Boy"] = true
+}
+
+local skills = {
+    {Skill = "Agility I", SkillTreeType = "Character"},
+    {Skill = "Agility II", SkillTreeType = "Character"},
+    {Skill = "Agility III", SkillTreeType = "Character"},
+    {Skill = "Worthiness", SkillTreeType = "Character"}
+}
+
+local function getPrestige() return player.PlayerStats.Prestige.Value end
+local function getLevel() return player.PlayerStats.Level.Value end
+
+local function resetCharacter()
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid") or char:FindFirstChild("Humanoid")
+        if hum then hum.Health = 0 end
+    end
+    local newChar = player.CharacterAdded:Wait()
+    return newChar, newChar:FindFirstChild("HumanoidRootPart"), player:FindFirstChild("Backpack")
+end
+
+local function refreshQuests()
+    local RF = player.Character and player.Character:FindFirstChild("RemoteFunction")
+    if RF then
+        pcall(function() RF:InvokeServer({"ReturnData"}) end)
+    end
+end
+
+local function endDialogue(NPC, Dialogue, Option)
+    local RE = player.Character and player.Character:FindFirstChild("RemoteEvent")
+    if RE then
+        RE:FireServer("EndDialogue", {
+            NPC = NPC,
+            Dialogue = Dialogue,
+            Option = Option or "Option1"
+        })
+    end
+end
+
+local function getQuestProgress()
+    local stats = player:FindFirstChild("PlayerStats")
+    if not stats then return {Progress = 0, Max = 0, Name = "None"} end
+    return {
+        Progress = stats:FindFirstChild("QuestProgress") and stats.QuestProgress.Value or 0,
+        Max = stats:FindFirstChild("QuestMaxProgress") and stats.QuestMaxProgress.Value or 0,
+        Name = stats:FindFirstChild("Quest") and stats.Quest.Value or "None"
+    }
+end
+
+local function findNPC(name)
+    local living = Workspace:FindFirstChild("Living")
+    if not living then return nil end
+    for _, npc in ipairs(living:GetChildren()) do
+        if npc.Name == name then
+            local hrp = npc:FindFirstChild("HumanoidRootPart")
+            local hp = npc:FindFirstChild("Health")
+            if hrp and hp and hp.Value > 0 then return npc end
+        end
+    end
+    return nil
+end
+
+local function learnSkills()
+    local RF = player.Character and player.Character:FindFirstChild("RemoteFunction")
+    if not RF then return end
+    for _, data in ipairs(skills) do
+        pcall(function() RF:InvokeServer("LearnSkill", data) end)
+    end
+end
+
+local function getGoodStand()
+    while mainActive do
+        local stats = player:FindFirstChild("PlayerStats")
+        if stats and stats:FindFirstChild("Stand") then
+            local standVal = stats.Stand.Value
+            if standVal ~= "None" then
+                if badStands[standVal] then
+                    if not (player.Backpack:FindFirstChild("Rokakaka") or (player.Character and player.Character:FindFirstChild("Rokakaka"))) then
+                        farmSpecificItem("Rokakaka")
+                    end
+                    useItemWithGUI("Rokakaka")
+                    task.wait(2)
+                else
+                    return standVal
+                end
+            else
+                learnSkills()
+                if not (player.Backpack:FindFirstChild("Mysterious Arrow") or (player.Character and player.Character:FindFirstChild("Mysterious Arrow"))) then
+                    farmSpecificItem("Mysterious Arrow")
+                end
+                useItemWithGUI("Mysterious Arrow")
+                task.wait(2)
+                local newStand = stats.Stand.Value
+                if newStand ~= "None" and not badStands[newStand] then
+                    resetCharacter()
+                    return newStand
+                end
+            end
+        end
+        task.wait(2)
+    end
+end
+
+local function startAttack()
+    if attacking then return end
+    attacking = true
+    attackThread = task.spawn(function()
+        while attacking and mainActive do
+            local RE = player.Character and player.Character:FindFirstChild("RemoteEvent")
+            if RE and RE.Parent then
+                RE:FireServer("HoldAttack", {Bool = true, Type = "m1"})
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopAttack()
+    attacking = false
+    if attackThread then task.cancel(attackThread) attackThread = nil end
+    local RE = player.Character and player.Character:FindFirstChild("RemoteEvent")
+    if RE and RE.Parent then
+        RE:FireServer("HoldAttack", {Bool = false, Type = "m1"})
+    end
+end
+
+local function toggleStand()
+    stopAttack()
+    task.wait(0.2)
+    local RF = player.Character and player.Character:FindFirstChild("RemoteFunction")
+    if RF and RF.Parent then
+        pcall(function() RF:InvokeServer("ToggleStand", "Toggle") end)
+    end
+    task.wait(0.5)
+end
+
+local function isStandSummoned()
+    return player.Character and player.Character:FindFirstChild("StandMorph") ~= nil
+end
+
+local function stopHeartbeat()
+    if heartbeatConn then heartbeatConn:Disconnect() heartbeatConn = nil end
+end
+
+local function stopStandMode()
+    standMode = false
+    currentTarget = nil
+    stopHeartbeat()
+    stopAttack()
+end
+
+local function summonStandWithCheck()
+    toggleStand()
+    task.wait(1.5)
+    if isStandSummoned() then return true end
+    for _ = 1, 3 do
+        if not mainActive then return false end
+        resetCharacter()
+        toggleStand()
+        task.wait(1.5)
+        if isStandSummoned() then return true end
+    end
+    return false
+end
+
+local function fightNPC(npc, useStand)
+    if not npc or not npc.Parent then return false end
+    stopHeartbeat()
+    startAttack()
+    
+    local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    heartbeatConn = RunService.Heartbeat:Connect(function()
+        if not mainActive or (useStand and not standMode) or not npc or not npc.Parent then
+            stopAttack()
+            return
+        end
+        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 or not rootPart then
+            stopAttack()
+            return
+        end
+        local targetRoot = npc:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then return end
+        if useStand then
+            local head = npc:FindFirstChild("Head")
+            if head then
+                rootPart.CFrame = CFrame.new(head.Position + Vector3.new(0, 25, 0))
+            end
+            local currentStand = player.Character:FindFirstChild("StandMorph")
+            if currentStand then
+                local standPos = targetRoot.Position + Vector3.new(0, -5, 0)
+                currentStand:SetPrimaryPartCFrame(CFrame.new(standPos, targetRoot.Position))
+            end
+        else
+            local behind = targetRoot.Position - targetRoot.CFrame.LookVector * 4
+            rootPart.CFrame = CFrame.new(behind, targetRoot.Position)
+        end
+    end)
+    
+    local startTime = os.clock()
+    local died = false
+    while mainActive and (not useStand or standMode) and npc and npc.Parent do
+        local hp = npc:FindFirstChild("Health")
+        if not hp or hp.Value <= 0 then died = true break end
+        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then break end
+        if useStand and os.clock() % 2 < 0.1 and not isStandSummoned() then
+            toggleStand()
+            task.wait(1)
+            if not attacking and mainActive then startAttack() end
+        end
+        task.wait(0.1)
+        if os.clock() - startTime > (useStand and 60 or 30) then break end
+    end
+    stopHeartbeat()
+    stopAttack()
+    task.wait(0.2)
+    return died
+end
+
+local function farmNPCs(name)
+    while mainActive and not standMode do
+        local progress = getQuestProgress()
+        if progress.Progress >= progress.Max and progress.Max > 0 then break end
+        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then
+            resetCharacter()
+            stopAttack()
+            task.wait(2)
+        end
+        local target = findNPC(name)
+        if target then
+            local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if rootPart and target:FindFirstChild("HumanoidRootPart") then
+                travelToPositionSmooth(target.HumanoidRootPart.Position, 30)
+            end
+            task.wait(0.3)
+            if not mainActive then break end
+            if fightNPC(target, false) then refreshQuests() end
+            task.wait(0.5)
+        else
+            task.wait(3)
+        end
+    end
+end
+
+local function farmWithStand(name)
+    standMode = true
+    while mainActive and standMode do
+        local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then
+            resetCharacter()
+            stopAttack()
+            continue
+        end
+        local progress = getQuestProgress()
+        if progress.Progress >= progress.Max and progress.Max > 0 then break end
+        local target = findNPC(name)
+        if target then
+            currentTarget = target
+            local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if rootPart and target:FindFirstChild("HumanoidRootPart") then
+                travelToPositionSmooth(target.HumanoidRootPart.Position, 30)
+            end
+            if not isStandSummoned() then
+                if not summonStandWithCheck() then
+                    standMode = false
+                    break
+                end
+            end
+            if fightNPC(target, true) then refreshQuests() end
+            task.wait(0.5)
+        else
+            stopAttack()
+            task.wait(1)
+        end
+    end
+    stopStandMode()
+end
+
+local function stopMainFarm()
+    mainActive = false
+    stopRequested = true
+    stopAttack()
+    stopStandMode()
+    if mainFarmThread then
+        local thread = mainFarmThread
+        mainFarmThread = nil
+        if coroutine.running() ~= thread then
+            pcall(function() task.cancel(thread) end)
+        end
+    end
+end
+
+local function mainFarmLoop()
+    while mainActive and not stopRequested do
+        pcall(function()
+            local prestige = getPrestige()
+            local level = getLevel()
+            
+            if prestige == 0 then
+                if level == 1 then
+                    endDialogue("Storyline #1", "Dialogue2")
+                    farmNPCs("Security Guard")
+                end
+                local stand = nil
+                while not stand and mainActive do
+                    stand = getGoodStand()
+                    task.wait(1)
+                end
+                if stand and not badStands[stand] then
+                    task.wait(1)
+                    level = getLevel()
+                    if level == 3 then
+                        endDialogue("Storyline #1", "Dialogue6")
+                        task.wait(0.1)
+                        endDialogue("Storyline #2", "Dialogue3")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 4 then
+                        endDialogue("Storyline #3", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Leaky Eye Luca")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 6 then
+                        endDialogue("Storyline #3", "Dialogue6")
+                        task.wait(0.1)
+                        farmWithStand("Bucciarati")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 9 then
+                        endDialogue("Storyline #4", "Dialogue3")
+                        endDialogue("Storyline #5", "Dialogue5")
+                        endDialogue("Storyline #6", "Dialogue5")
+                        endDialogue("Storyline #7", "Dialogue5")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 10 then
+                        endDialogue("Storyline #8", "Dialogue4")
+                        endDialogue("Storyline #9", "Dialogue7")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 11 then
+                        endDialogue("Storyline #10", "Dialogue6")
+                        endDialogue("Storyline #11", "Dialogue8")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 12 then
+                        task.wait(0.1)
+                        farmWithStand("Fugo")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 15 then
+                        endDialogue("Storyline #11", "Dialogue11")
+                        task.wait(0.1)
+                        farmWithStand("Pesci")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 18 then
+                        endDialogue("Storyline #12", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Ghiaccio")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 21 then
+                        endDialogue("Storyline #14", "Dialogue2")
+                        task.wait(0.1)
+                        farmWithStand("Diavolo")
+                        endDialogue("Storyline #14", "Dialogue7")
+                        resetCharacter()
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 25 and level < 30 then
+                        while mainActive and getLevel() < 30 do
+                            endDialogue("William Zeppeli", "Dialogue4")
+                            if not mainActive then break end
+                            farmWithStand("Vampire")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 30 and level < 35 then
+                        while mainActive and getLevel() < 35 do
+                            endDialogue("Doppio", "Dialogue3")
+                            endDialogue("Doppio", "Dialogue5")
+                            if not mainActive then break end
+                            farmWithStand("DIO")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 35 then
+                        endDialogue("Prestige", "Dialogue2")
+                        wait(5)
+                        prestige = getPrestige()
+                        level = getLevel()
+                    end
+                end
+            end
+            
+            if prestige == 1 then
+                if level == 1 then
+                    endDialogue("Storyline #1", "Dialogue2")
+                    farmNPCs("Security Guard")
+                end
+                local stand = nil
+                while not stand and mainActive do
+                    stand = getGoodStand()
+                    task.wait(1)
+                end
+                if stand and not badStands[stand] then
+                    task.wait(1)
+                    level = getLevel()
+                    if level == 3 then
+                        endDialogue("Storyline #1", "Dialogue6")
+                        task.wait(0.1)
+                        endDialogue("Storyline #2", "Dialogue3")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 4 then
+                        endDialogue("Storyline #3", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Leaky Eye Luca")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 7 then
+                        endDialogue("Storyline #3", "Dialogue6")
+                        task.wait(0.1)
+                        farmWithStand("Bucciarati")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 10 then
+                        endDialogue("Storyline #4", "Dialogue3")
+                        endDialogue("Storyline #5", "Dialogue5")
+                        endDialogue("Storyline #6", "Dialogue5")
+                        endDialogue("Storyline #7", "Dialogue5")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 11 then
+                        endDialogue("Storyline #8", "Dialogue4")
+                        endDialogue("Storyline #9", "Dialogue7")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 12 then
+                        endDialogue("Storyline #10", "Dialogue6")
+                        endDialogue("Storyline #11", "Dialogue8")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 13 then
+                        task.wait(0.1)
+                        farmWithStand("Fugo")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 17 then
+                        endDialogue("Storyline #11", "Dialogue11")
+                        task.wait(0.1)
+                        farmWithStand("Pesci")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 20 then
+                        endDialogue("Storyline #12", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Ghiaccio")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 23 then
+                        endDialogue("Storyline #14", "Dialogue2")
+                        task.wait(0.1)
+                        farmWithStand("Diavolo")
+                        endDialogue("Storyline #14", "Dialogue7")
+                        resetCharacter()
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 27 and level < 30 then
+                        while mainActive and getLevel() < 30 do
+                            endDialogue("William Zeppeli", "Dialogue4")
+                            if not mainActive then break end
+                            farmWithStand("Vampire")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 30 and level < 35 then
+                        while mainActive and getLevel() < 35 do
+                            endDialogue("Doppio", "Dialogue3")
+                            endDialogue("Doppio", "Dialogue5")
+                            if not mainActive then break end
+                            farmWithStand("DIO")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 35 and level < 40 then
+                        while mainActive and getLevel() < 40 do
+                            endDialogue("Dio", "Dialogue4")
+                            endDialogue("Dio", "Dialogue6")
+                            if not mainActive then break end
+                            farmWithStand("Jotaro")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 40 then
+                        endDialogue("Prestige", "Dialogue2")
+                        wait(5)
+                        prestige = getPrestige()
+                        level = getLevel()
+                    end
+                end
+            end
+            
+            if prestige == 2 then
+                if level == 1 then
+                    endDialogue("Storyline #1", "Dialogue2")
+                    farmNPCs("Security Guard")
+                end
+                local stand = nil
+                while not stand and mainActive do
+                    stand = getGoodStand()
+                    task.wait(1)
+                end
+                if stand and not badStands[stand] then
+                    task.wait(1)
+                    level = getLevel()
+                    if level == 3 then
+                        endDialogue("Storyline #1", "Dialogue6")
+                        task.wait(0.1)
+                        endDialogue("Storyline #2", "Dialogue3")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 4 then
+                        endDialogue("Storyline #3", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Leaky Eye Luca")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 7 then
+                        endDialogue("Storyline #3", "Dialogue6")
+                        task.wait(0.1)
+                        farmWithStand("Bucciarati")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 11 then
+                        endDialogue("Storyline #4", "Dialogue3")
+                        endDialogue("Storyline #5", "Dialogue5")
+                        endDialogue("Storyline #6", "Dialogue5")
+                        endDialogue("Storyline #7", "Dialogue5")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 12 then
+                        endDialogue("Storyline #8", "Dialogue4")
+                        endDialogue("Storyline #9", "Dialogue7")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 12 then
+                        endDialogue("Storyline #10", "Dialogue6")
+                        endDialogue("Storyline #11", "Dialogue8")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 14 then
+                        task.wait(0.1)
+                        farmWithStand("Fugo")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 18 then
+                        endDialogue("Storyline #11", "Dialogue11")
+                        task.wait(0.1)
+                        farmWithStand("Pesci")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 22 then
+                        endDialogue("Storyline #12", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Ghiaccio")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 25 then
+                        endDialogue("Storyline #14", "Dialogue2")
+                        task.wait(0.1)
+                        farmWithStand("Diavolo")
+                        endDialogue("Storyline #14", "Dialogue7")
+                        resetCharacter()
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 29 and level < 30 then
+                        while mainActive and getLevel() < 30 do
+                            endDialogue("William Zeppeli", "Dialogue4")
+                            if not mainActive then break end
+                            farmWithStand("Vampire")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 30 and level < 35 then
+                        while mainActive and getLevel() < 35 do
+                            endDialogue("Doppio", "Dialogue3")
+                            endDialogue("Doppio", "Dialogue5")
+                            if not mainActive then break end
+                            farmWithStand("DIO")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 35 and level < 45 then
+                        while mainActive and getLevel() < 45 do
+                            endDialogue("Dio", "Dialogue4")
+                            endDialogue("Dio", "Dialogue6")
+                            if not mainActive then break end
+                            farmWithStand("Jotaro")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 45 then
+                        endDialogue("Prestige", "Dialogue2")
+                        wait(5)
+                        prestige = getPrestige()
+                        level = getLevel()
+                    end
+                end
+            end
+            
+            if prestige == 3 then
+                if level == 1 then
+                    endDialogue("Storyline #1", "Dialogue2")
+                    farmNPCs("Security Guard")
+                end
+                local stand = nil
+                while not stand and mainActive do
+                    stand = getGoodStand()
+                    task.wait(1)
+                end
+                if stand and not badStands[stand] then
+                    task.wait(1)
+                    level = getLevel()
+                    if level == 3 then
+                        endDialogue("Storyline #1", "Dialogue6")
+                        task.wait(0.1)
+                        endDialogue("Storyline #2", "Dialogue3")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 5 then
+                        endDialogue("Storyline #3", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Leaky Eye Luca")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 8 then
+                        endDialogue("Storyline #3", "Dialogue6")
+                        task.wait(0.1)
+                        farmWithStand("Bucciarati")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 11 then
+                        endDialogue("Storyline #4", "Dialogue3")
+                        endDialogue("Storyline #5", "Dialogue5")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 12 then
+                        endDialogue("Storyline #6", "Dialogue5")
+                        endDialogue("Storyline #7", "Dialogue5")
+                        endDialogue("Storyline #8", "Dialogue4")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 13 then
+                        endDialogue("Storyline #9", "Dialogue7")
+                        endDialogue("Storyline #10", "Dialogue6")
+                        endDialogue("Storyline #11", "Dialogue8")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 15 then
+                        task.wait(0.1)
+                        farmWithStand("Fugo")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 19 then
+                        endDialogue("Storyline #11", "Dialogue11")
+                        task.wait(0.1)
+                        farmWithStand("Pesci")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 23 then
+                        endDialogue("Storyline #12", "Dialogue3")
+                        task.wait(0.1)
+                        farmWithStand("Ghiaccio")
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 27 then
+                        endDialogue("Storyline #14", "Dialogue2")
+                        task.wait(0.1)
+                        farmWithStand("Diavolo")
+                        endDialogue("Storyline #14", "Dialogue7")
+                        resetCharacter()
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 30 and level < 35 then
+                        while mainActive and getLevel() < 35 do
+                            endDialogue("Doppio", "Dialogue3")
+                            endDialogue("Doppio", "Dialogue5")
+                            if not mainActive then break end
+                            farmWithStand("DIO")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level >= 35 and level < 50 then
+                        while mainActive and getLevel() < 50 do
+                            endDialogue("Dio", "Dialogue4")
+                            endDialogue("Dio", "Dialogue6")
+                            if not mainActive then break end
+                            farmWithStand("Jotaro")
+                            task.wait(0.5)
+                        end
+                        task.wait(1)
+                        level = getLevel()
+                    end
+                    if level == 50 then
+                        stopMainFarm()
+                    end
+                end
+            end
+        end)
+        if not mainActive then break end
+    end
+end
+
 local function CreateItemESP()
+    if _G.ItemESP_Active == nil then
+        _G.ItemESP_Active = false
+    end
+    
     if _G.ItemESP_Active then
         return espInstance
     end
+    
     _G.ItemESP_Active = true
+    espTracker = {}
+    setupTracker(espTracker)
     
     local espGui = Instance.new("BillboardGui")
     espGui.Name = "ItemESP"
@@ -254,8 +1381,8 @@ local function CreateItemESP()
     textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     textLabel.Parent = espGui
     
-    local function UpdateESP()
-        for itemName, items in pairs(_G.ItemESP_Items) do
+    local function updateESP()
+        for itemName, items in pairs(espTracker) do
             for _, prompt in pairs(items) do
                 local parent = prompt.Parent
                 if parent and parent:IsDescendantOf(workspace) then
@@ -266,7 +1393,6 @@ local function CreateItemESP()
                         local label = newESP:FindFirstChildOfClass("TextLabel")
                         if label then
                             label.Text = itemName
-                            
                             if itemName:find("Arrow") or itemName:find("Mysterious") then
                                 label.TextColor3 = Color3.fromRGB(255, 80, 80)
                             elseif itemName:find("Rib") or itemName:find("Cage") then
@@ -291,94 +1417,30 @@ local function CreateItemESP()
         end
     end
     
-    local function RegisterAllItemsForESP()
-        local itemsContainer = workspace:FindFirstChild("Item_Spawns")
-        if itemsContainer then
-            itemsContainer = itemsContainer:FindFirstChild("Items")
-            if itemsContainer then
-                for _, item in pairs(itemsContainer:GetDescendants()) do
-                    if item.ClassName == "ProximityPrompt" then
-                        RegisterItemForESP(item)
-                    end
-                end
-            end
-        end
-    end
+    updateESP()
     
-    local function OnItemAddedForESP(item)
-        if item.ClassName == "ProximityPrompt" then
-            RegisterItemForESP(item)
-            task.wait(0.05)
-            UpdateESP()
-        end
-    end
-    
-    if getgenv().item_added_esp_conn then
-        getgenv().item_added_esp_conn:Disconnect()
-    end
-    if getgenv().item_removed_esp_conn then
-        getgenv().item_removed_esp_conn:Disconnect()
-    end
-    
-    local itemsContainer = workspace:FindFirstChild("Item_Spawns")
-    if itemsContainer then
-        itemsContainer = itemsContainer:FindFirstChild("Items")
-        if itemsContainer then
-            getgenv().item_added_esp_conn = itemsContainer.DescendantAdded:Connect(OnItemAddedForESP)
-            getgenv().item_removed_esp_conn = itemsContainer.DescendantRemoving:Connect(function(item)
-                if item.ClassName == "ProximityPrompt" then
-                    local itemName = item.ObjectText or "Unknown"
-                    if _G.ItemESP_Items[itemName] then
-                        for i, v in pairs(_G.ItemESP_Items[itemName]) do
-                            if v == item then
-                                table.remove(_G.ItemESP_Items[itemName], i)
-                                break
-                            end
-                        end
-                        if #_G.ItemESP_Items[itemName] == 0 then
-                            _G.ItemESP_Items[itemName] = nil
-                        end
-                    end
-                end
-            end)
-        end
-    end
-    
-    RegisterAllItemsForESP()
-    task.wait(0.3)
-    UpdateESP()
-    
-    task.spawn(function()
+    local espUpdateThread = task.spawn(function()
         while _G.ItemESP_Active do
-            task.wait(2)
-            UpdateESP()
+            task.wait(1)
+            updateESP()
         end
     end)
     
     espInstance = {
         Disable = function()
             _G.ItemESP_Active = false
-            if getgenv().item_added_esp_conn then
-                getgenv().item_added_esp_conn:Disconnect()
-                getgenv().item_added_esp_conn = nil
+            if espUpdateThread then 
+                pcall(function() task.cancel(espUpdateThread) end)
+                espUpdateThread = nil
             end
-            if getgenv().item_removed_esp_conn then
-                getgenv().item_removed_esp_conn:Disconnect()
-                getgenv().item_removed_esp_conn = nil
-            end
-            local itemsContainer = workspace:FindFirstChild("Item_Spawns")
-            if itemsContainer then
-                itemsContainer = itemsContainer:FindFirstChild("Items")
-                if itemsContainer then
-                    for _, item in pairs(itemsContainer:GetChildren()) do
-                        local esp = item:FindFirstChild("ItemESP")
-                        if esp then
-                            esp:Destroy()
-                        end
-                    end
+            local container = getItemContainer()
+            if container then
+                for _, item in pairs(container:GetChildren()) do
+                    local esp = item:FindFirstChild("ItemESP")
+                    if esp then esp:Destroy() end
                 end
             end
-            _G.ItemESP_Items = {}
+            espTracker = {}
             espInstance = nil
         end
     }
@@ -386,1273 +1448,21 @@ local function CreateItemESP()
     return espInstance
 end
 
-local function getItemPosition(model)
-    if not model then return nil end
-    local part = model:IsA("BasePart") and model or model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
-    return part and part.Position or nil
-end
-
-local function getDistanceToItem(model)
-    local _, rootPart = updateCharacterForItems()
-    if not rootPart or not rootPart.Parent then
-        return math.huge
-    end
-    
-    local itemPos = getItemPosition(model)
-    if not itemPos then
-        return math.huge
-    end
-    
-    return (rootPart.Position - itemPos).Magnitude
-end
-
-local function activateRemoteEvents(model, prompt)
-    if not model or not model:IsDescendantOf(workspace) then
-        return false
-    end
-    
-    local remoteEvents = {}
-    for _, descendant in ipairs(model:GetDescendants()) do
-        if descendant:IsA("RemoteEvent") then
-            table.insert(remoteEvents, descendant)
-        end
-    end
-    
-    if #remoteEvents > 0 then
-        for _, remote in ipairs(remoteEvents) do
-            if not isFarmingItems or not model.Parent then break end
-            
-            for i = 1, 3 do
-                pcall(function()
-                    remote:FireServer()
-                    remote:FireServer(model)
-                    remote:FireServer(prompt)
-                end)
-                task.wait(0.15)
-            end
-        end
-        return true
-    end
-    return false
-end
-
-local function collectItem(model, name, prompt)
-    if not model or not model:IsDescendantOf(workspace) then 
-        return false 
-    end
-    
-    local distance = getDistanceToItem(model)
-    
-    if distance > ACTIVATION_DISTANCE then
-        local part = model:IsA("BasePart") and model or model.PrimaryPart or model:FindFirstChildOfClass("BasePart")
-        if part then
-            if travelToPositionAnchored(part.Position + Vector3.new(0, 1, 0)) then
-                task.wait(0.3)
-                local newDistance = getDistanceToItem(model)
-                if newDistance <= ACTIVATION_DISTANCE then
-                    return activateRemoteEvents(model, prompt)
-                end
-            end
-        end
-        return false
-    else
-        return activateRemoteEvents(model, prompt)
-    end
-end
-
-local function getSpawnedItems()
-    local availableItems = {}
-    for name, prompts in pairs(itemFarmTable) do
-        if selectedItems[name] then
-            for _, prompt in ipairs(prompts) do
-                if prompt and prompt:IsDescendantOf(workspace) then
-                    local parent = prompt.Parent
-                    if parent then
-                        table.insert(availableItems, {
-                            Name = name,
-                            Prompt = prompt,
-                            Model = parent
-                        })
-                    end
-                end
-            end
-        end
-    end
-    return availableItems
-end
-
-local function startItemFarmLoop()
-    while isFarmingItems do
-        local char, rootPart = updateCharacterForItems()
-        if not char or not rootPart then
-            task.wait(1)
-            continue
-        end
-        
-        local hum = char:FindFirstChild("Humanoid")
-        if not hum or hum.Health <= 0 then
-            player.CharacterAdded:Wait()
-            task.wait(1)
-            continue
-        end
-        
-        local items = getSpawnedItems()
-        if #items == 0 then
-            task.wait(1.5)
-            continue
-        end
-        
-        table.sort(items, function(a, b)
-            local distA = getDistanceToItem(a.Model)
-            local distB = getDistanceToItem(b.Model)
-            return distA < distB
-        end)
-        
-        for _, item in ipairs(items) do
-            if not isFarmingItems then break end
-            
-            collectItem(item.Model, item.Name, item.Prompt)
-            task.wait(0.3)
-        end
-        
-        task.wait(0.5)
-    end
-end
-
-local function toggleItemFarm()
-    local hasSelected = false
-    for _, selected in pairs(selectedItems) do
-        if selected then
-            hasSelected = true
-            break
-        end
-    end
-    
-    if not hasSelected then
-        return false
-    end
-    
-    isFarmingItems = not isFarmingItems
-    
-    if isFarmingItems then
-        farmThread = task.spawn(startItemFarmLoop)
-    else
-        if farmThread then
-            task.cancel(farmThread)
-            farmThread = nil
-        end
-    end
-    
-    return true
-end
-
-local function loadMainScript()
-    local character, rootPart, backpack, RE, RF, QuestsRF
-
-    local active = false
-    local farmThreadMain = nil
-    local attacking = false
-    local attackThreadMain = nil
-    local standMode = false
-    local currentTarget = nil
-    local heartbeatConn = nil
-    local stopRequested = false
-
-    local badStands = {
-        ["Six Pistols"] = true, ["Mr. President"] = true, ["Hermit Purple"] = true,
-        ["Anubis"] = true, ["Aerosmith"] = true, ["White Album"] = true, ["Beach Boy"] = true
-    }
-
-    local skills = {
-        {Skill = "Agility I", SkillTreeType = "Character"},
-        {Skill = "Agility II", SkillTreeType = "Character"},
-        {Skill = "Agility III", SkillTreeType = "Character"},
-        {Skill = "Worthiness", SkillTreeType = "Character"}
-    }
-
-    local function updateCharacterMain(newChar)
-        character = newChar or player.Character
-        if not character then return end
-        
-        rootPart = character:WaitForChild("HumanoidRootPart", 5)
-        backpack = player:WaitForChild("Backpack", 5)
-        RE = character:WaitForChild("RemoteEvent", 5)
-        RF = character:WaitForChild("RemoteFunction", 5)
-        QuestsRF = character:FindFirstChild("QuestsRemoteFunction") or ReplicatedStorage:FindFirstChild("QuestsRemoteFunction")
-    end
-
-    local function resetCharacter()
-        updateCharacterMain(player.Character)
-        if character then
-            local hum = character:FindFirstChildOfClass("Humanoid") or character:FindFirstChild("Humanoid")
-            if hum then
-                hum.Health = 0
-            end
-        end
-        local newChar = player.CharacterAdded:Wait()
-        updateCharacterMain(newChar)
-        task.wait(1)
-    end
-
-    if player.Character then updateCharacterMain(player.Character) end
-
-    local function RefreshQuests()
-        if QuestsRF then
-            pcall(function() QuestsRF:InvokeServer({"ReturnData"}) end)
-        end
-    end
-
-    local function EndDialogue(NPC, Dialogue, Option)
-        if RE then
-            RE:FireServer("EndDialogue", {
-                NPC = NPC,
-                Dialogue = Dialogue,
-                Option = Option or "Option1"
-            })
-        end
-    end
-
-    local function getQuestProgress()
-        local stats = player:FindFirstChild("PlayerStats")
-        if not stats then return {Progress = 0, Max = 0, Name = "None"} end
-        
-        return {
-            Progress = stats:FindFirstChild("QuestProgress") and stats.QuestProgress.Value or 0,
-            Max = stats:FindFirstChild("QuestMaxProgress") and stats.QuestMaxProgress.Value or 0,
-            Name = stats:FindFirstChild("Quest") and stats.Quest.Value or "None"
-        }
-    end
-
-    local function waitForOptions(dialogue, timeout)
-        timeout = timeout or 5
-        local start = os.clock()
-        
-        while os.clock() - start < timeout do
-            if not dialogue or not dialogue.Parent then return nil end
-            local frame = dialogue:FindFirstChild("Frame")
-            local options = frame and frame:FindFirstChild("Options")
-            
-            if options then
-                local buttons = {}
-                for _, child in ipairs(options:GetChildren()) do
-                    if child.Name:match("Option%d+") then
-                        local btn = child:FindFirstChild("TextButton")
-                        if btn and btn.Visible and btn.Active then
-                            table.insert(buttons, btn)
-                        end
-                    end
-                end
-                if #buttons > 0 then return buttons end
-            end
-            task.wait(0.05)
-        end
-        return nil
-    end
-
-    local function pressButton(button)
-        if not button or not button.Parent then return false end
-        return pcall(function()
-            local connections = getconnections(button.MouseButton1Click)
-            if connections and #connections > 0 then
-                local func = connections[1].Function
-                local info = debug.getinfo(func)
-                for i = 1, info.nups do
-                    if debug.getupvalue(func, i) == "Option1" then
-                        debug.setupvalue(func, i, true)
-                        break
-                    end
-                end
-                func()
-            end
-        end)
-    end
-
-    local function endDialogue(story, dialogue)
-        RefreshQuests()
-        task.wait(0.1)
-        EndDialogue(story, dialogue, "Option1")
-        task.wait(0.1)
-        RefreshQuests()
-    end
-
-    local function travelMainAnchored(pos)
-        if not rootPart or not rootPart.Parent then return false end
-        
-        local wasAnchoredMain = rootPart.Anchored
-        rootPart.Anchored = true
-        
-        local success = false
-        
-        pcall(function()
-            local start = rootPart.Position
-            local dir = (pos - start)
-            local dist = dir.Magnitude
-            local steps = math.max(1, math.ceil(dist / 50))
-            local stepVec = dir / steps
-            
-            for _ = 1, steps do
-                if not active or not rootPart or not rootPart.Parent then return end
-                rootPart.CFrame = CFrame.new(rootPart.Position + stepVec)
-                task.wait(0.05)
-            end
-            rootPart.CFrame = CFrame.new(pos)
-            task.wait(0.05)
-            success = true
-        end)
-        
-        rootPart.Anchored = wasAnchoredMain
-        
-        return success
-    end
-
-    local function findNPC(name)
-        local living = Workspace:FindFirstChild("Living")
-        if not living then return nil end
-        for _, npc in ipairs(living:GetChildren()) do
-            if npc.Name == name then
-                local hrp = npc:FindFirstChild("HumanoidRootPart")
-                local hp = npc:FindFirstChild("Health")
-                if hrp and hp and hp.Value > 0 then return npc end
-            end
-        end
-        return nil
-    end
-
-    local function getPrestige() return player.PlayerStats.Prestige.Value end
-    local function getLevel() return player.PlayerStats.Level.Value end
-
-    local function learnSkills()
-        if not RF then return end
-        for _, data in ipairs(skills) do
-            pcall(function() RF:InvokeServer("LearnSkill", data) end)
-        end
-    end
-
-    local function farmItem(name)
-        local hasItems = false
-        for itemName, prompts in pairs(itemFarmTable) do
-            if itemName == name and #prompts > 0 then
-                hasItems = true
-                break
-            end
-        end
-        
-        if not hasItems then
-            return false
-        end
-        
-        if not isFarmingItems then
-            local wasFarming = isFarmingItems
-            isFarmingItems = true
-            
-            local oldSelection = {}
-            for item, selected in pairs(selectedItems) do
-                oldSelection[item] = selected
-                selectedItems[item] = (item == name)
-            end
-            
-            farmThread = task.spawn(startItemFarmLoop)
-            
-            local timeout = 30
-            local startTime = os.clock()
-            while os.clock() - startTime < timeout do
-                if (backpack and backpack:FindFirstChild(name)) or (character and character:FindFirstChild(name)) then
-                    break
-                end
-                task.wait(0.5)
-            end
-            
-            isFarmingItems = wasFarming
-            for item, selected in pairs(oldSelection) do
-                selectedItems[item] = selected
-            end
-            
-            if farmThread then
-                task.cancel(farmThread)
-                farmThread = nil
-            end
-            
-            if (backpack and backpack:FindFirstChild(name)) or (character and character:FindFirstChild(name)) then
-                return true
-            else
-                return false
-            end
-        end
-        
-        return false
-    end
-
-    local function useItemWithGUI(itemName)
-        if not character or not backpack then return false end
-        local tool = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
-        if not tool then return false end
-        
-        local humanoid = character:FindFirstChild("Humanoid")
-        if humanoid and tool.Parent == backpack then
-            humanoid:EquipTool(tool)
-            task.wait(0.5)
-        end
-        
-        tool:Activate()
-        
-        local dialogue
-        for _ = 1, 20 do
-            dialogue = player.PlayerGui:FindFirstChild("DialogueGui")
-            if dialogue then break end
-            task.wait(0.1)
-        end
-        if not dialogue then return false end
-        
-        local buttons = waitForOptions(dialogue, 10)
-        if not buttons or #buttons == 0 then return false end
-        
-        while dialogue and dialogue.Parent do
-            local currentButtons = waitForOptions(dialogue, 1)
-            if currentButtons then
-                for _, btn in ipairs(currentButtons) do
-                    if btn and btn.Parent and btn.Visible and btn.Active then
-                        pressButton(btn)
-                        task.wait(0.3)
-                        if not dialogue.Parent then break end
-                    end
-                end
-            else
-                task.wait(0.2)
-            end
-        end
-        
-        task.wait(1)
-        local stats = player:FindFirstChild("PlayerStats")
-        return stats and stats:FindFirstChild("Stand") and stats.Stand.Value ~= "None"
-    end
-
-    local function useArrow() return useItemWithGUI("Mysterious Arrow") end
-    local function useRoka() return useItemWithGUI("Rokakaka") end
-
-    local function startAttack()
-        if attacking then return end
-        attacking = true
-        attackThreadMain = task.spawn(function()
-            while attacking and active do
-                if RE and RE.Parent then
-                    RE:FireServer("HoldAttack", {Bool = true, Type = "m1"})
-                end
-                task.wait(0.1)
-            end
-        end)
-    end
-
-    local function stopAttack()
-        attacking = false
-        if attackThreadMain then 
-            task.cancel(attackThreadMain) 
-            attackThreadMain = nil 
-        end
-        if RE and RE.Parent then
-            RE:FireServer("HoldAttack", {Bool = false, Type = "m1"})
-        end
-    end
-
-    local function toggleStand()
-        stopAttack()
-        task.wait(0.2)
-        if RF and RF.Parent then
-            pcall(function() RF:InvokeServer("ToggleStand", "Toggle") end)
-        end
-        task.wait(0.5)
-    end
-
-    local function isStandSummoned()
-        return character and character:FindFirstChild("StandMorph") ~= nil
-    end
-
-    local function stopHeartbeat()
-        if heartbeatConn then 
-            heartbeatConn:Disconnect() 
-            heartbeatConn = nil 
-        end
-    end
-
-    local function stopStandMode()
-        standMode = false
-        currentTarget = nil
-        stopHeartbeat()
-        stopAttack()
-    end
-
-    local function fightNPC(npc, useStand)
-        if not npc or not npc.Parent then return false end
-        
-        stopHeartbeat()
-        startAttack()
-        
-        heartbeatConn = RunService.Heartbeat:Connect(function()
-            if not active or (useStand and not standMode) or not npc or not npc.Parent then 
-                stopAttack()
-                return 
-            end
-            
-            local hum = character and character:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 or not rootPart then 
-                stopAttack()
-                return 
-            end
-            
-            local targetRoot = npc:FindFirstChild("HumanoidRootPart")
-            if not targetRoot then return end
-
-            if useStand then
-                local head = npc:FindFirstChild("Head")
-                if head then
-                    rootPart.CFrame = CFrame.new(head.Position + Vector3.new(0, 25, 0))
-                end
-                
-                local currentStand = character:FindFirstChild("StandMorph")
-                if currentStand then
-                    local standPos = targetRoot.Position + Vector3.new(0, -5, 0)
-                    local directionToTarget = (targetRoot.Position - standPos).Unit
-                    currentStand:SetPrimaryPartCFrame(
-                        CFrame.new(standPos, standPos + directionToTarget)
-                    )
-                end
-            else
-                local behind = targetRoot.Position - targetRoot.CFrame.LookVector * 4
-                rootPart.CFrame = CFrame.new(behind, targetRoot.Position)
-            end
-        end)
-        
-        local startTime = os.clock()
-        local died = false
-        
-        while active and (not useStand or standMode) and npc and npc.Parent do
-            local hp = npc:FindFirstChild("Health")
-            if not hp or hp.Value <= 0 then died = true break end
-            
-            local hum = character and character:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 then break end
-            
-            if useStand and os.clock() % 2 < 0.1 and not isStandSummoned() then
-                toggleStand()
-                task.wait(1)
-                if not attacking and active then startAttack() end
-            end
-            
-            task.wait(0.1)
-            if os.clock() - startTime > (useStand and 60 or 30) then break end
-        end
-        
-        stopHeartbeat()
-        stopAttack()
-        task.wait(0.2)
-        return died
-    end
-
-    local function summonStandWithCheck()
-        toggleStand()
-        task.wait(1.5)
-        
-        if isStandSummoned() then
-            return true
-        end
-
-        local attempts = 0
-        while attempts < 3 and active do
-            attempts = attempts + 1
-            resetCharacter()
-            toggleStand()
-            task.wait(1.5)
-            
-            if isStandSummoned() then
-                return true
-            end
-        end
-        
-        return false
-    end
-
-    local function farmNPCs(name)
-        while active and not standMode do
-            local progress = getQuestProgress()
-            
-            if progress.Progress >= progress.Max and progress.Max > 0 then
-                break
-            end
-            
-            local hum = character and character:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 then
-                character = player.CharacterAdded:Wait()
-                updateCharacterMain(character)
-                stopAttack()
-                task.wait(2)
-            end
-            
-            local target = findNPC(name)
-            if target then
-                travelMainAnchored(target.HumanoidRootPart.Position)
-                task.wait(0.3)
-                if not active then break end
-                if fightNPC(target, false) then RefreshQuests() end
-                task.wait(0.5)
-            else
-                task.wait(3)
-            end
-        end
-    end
-
-    local function getGoodStand()
-        while active do
-            local stats = player:FindFirstChild("PlayerStats")
-            if stats and stats:FindFirstChild("Stand") then
-                local standVal = stats.Stand.Value
-
-                if standVal ~= "None" then
-                    if badStands[standVal] then
-                        if not (backpack:FindFirstChild("Rokakaka") or character:FindFirstChild("Rokakaka")) then
-                            farmItem("Rokakaka")
-                        end
-                        useRoka()
-                        task.wait(2)
-                    else
-                        return standVal
-                    end
-                else
-                    learnSkills()
-                    
-                    if not (backpack:FindFirstChild("Mysterious Arrow") or character:FindFirstChild("Mysterious Arrow")) then
-                        farmItem("Mysterious Arrow")
-                    end
-                    useArrow()
-                    task.wait(2)
-
-                    local newStand = stats.Stand.Value
-                    if newStand ~= "None" and not badStands[newStand] then
-                        resetCharacter()
-                        return newStand
-                    end
-                end
-            end
-            task.wait(2)
-        end
-    end
-
-    local function farmWithStand(name)
-        standMode = true
-        
-        while active and standMode do
-            local hum = character and character:FindFirstChild("Humanoid")
-            if not hum or hum.Health <= 0 then
-                character = player.CharacterAdded:Wait()
-                updateCharacterMain(character)
-                stopAttack()
-                continue
-            end
-            
-            local progress = getQuestProgress()
-            
-            if progress.Progress >= progress.Max and progress.Max > 0 then
-                break
-            end
-
-            local target = findNPC(name)
-            if target then
-                currentTarget = target
-                
-                if target:FindFirstChild("HumanoidRootPart") then
-                    travelMainAnchored(target.HumanoidRootPart.Position)
-                end
-                
-                if not isStandSummoned() then
-                    if not summonStandWithCheck() then 
-                        standMode = false 
-                        break 
-                    end
-                end
-                
-                if fightNPC(target, true) then RefreshQuests() end
-                task.wait(0.5)
-            else
-                stopAttack()
-                task.wait(1)
-            end
-        end
-        stopStandMode()
-    end
-
-    local function stopAll()
-        active = false
-        stopRequested = true
-        stopAttack()
-        stopStandMode()
-        
-        if farmThreadMain then
-            local threadToCancel = farmThreadMain
-            farmThreadMain = nil
-            if coroutine.running() ~= threadToCancel then
-                pcall(function() task.cancel(threadToCancel) end)
-            end
-        end
-    end
-
-    local function mainFarm()
-        while active and not stopRequested do
-            pcall(function()
-                local prestige = getPrestige()
-                local level = getLevel()
-                
-                if prestige == 0 then
-                    if level == 1 then
-                        endDialogue("Storyline #1", "Dialogue2")
-                        farmNPCs("Security Guard")
-                    end
-                    
-                    local stand = nil
-                    while not stand and active do
-                        stand = getGoodStand()
-                        task.wait(1)
-                    end
-                    
-                    if stand and not badStands[stand] then
-                        task.wait(1)
-                        level = getLevel()
-                        if level == 3 then
-                            endDialogue("Storyline #1", "Dialogue6")
-                            task.wait(0.1)
-                            endDialogue("Storyline #2", "Dialogue3")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 4 then
-                            endDialogue("Storyline #3", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Leaky Eye Luca")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 6 then
-                            endDialogue("Storyline #3", "Dialogue6")
-                            task.wait(0.1)
-                            farmWithStand("Bucciarati")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 9 then
-                            endDialogue("Storyline #4", "Dialogue3")
-                            endDialogue("Storyline #5", "Dialogue5")
-                            endDialogue("Storyline #6", "Dialogue5")
-                            endDialogue("Storyline #7", "Dialogue5")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 10 then
-                            endDialogue("Storyline #8", "Dialogue4")
-                            endDialogue("Storyline #9", "Dialogue7")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 11 then
-                            endDialogue("Storyline #10", "Dialogue6")
-                            endDialogue("Storyline #11", "Dialogue8")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 12 then
-                            task.wait(0.1)
-                            farmWithStand("Fugo")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 15 then
-                            endDialogue("Storyline #11", "Dialogue11")
-                            task.wait(0.1)
-                            farmWithStand("Pesci")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 18 then
-                            endDialogue("Storyline #12", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Ghiaccio")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 21 then
-                            endDialogue("Storyline #14", "Dialogue2")
-                            task.wait(0.1)
-                            farmWithStand("Diavolo")
-                            endDialogue("Storyline #14", "Dialogue7")
-                            resetCharacter()
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 25 and level < 30 then
-                            while active and getLevel() < 30 do
-                                endDialogue("William Zeppeli", "Dialogue4")
-                                if not active then break end
-                                farmWithStand("Vampire")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 30 and level < 35 then
-                            while active and getLevel() < 35 do
-                                endDialogue("Doppio", "Dialogue3")
-                                endDialogue("Doppio", "Dialogue5")
-                                if not active then break end
-                                farmWithStand("DIO")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 35 then
-                            endDialogue("Prestige", "Dialogue2")
-                            wait(5)
-                            prestige = getPrestige()
-                            level = getLevel()
-                        end
-                    end
-                end
-                
-                if prestige == 1 then
-                    if level == 1 then
-                        endDialogue("Storyline #1", "Dialogue2")
-                        farmNPCs("Security Guard")
-                    end
-                    
-                    local stand = nil
-                    while not stand and active do
-                        stand = getGoodStand()
-                        task.wait(1)
-                    end
-                    
-                    if stand and not badStands[stand] then
-                        task.wait(1)
-                        level = getLevel()
-                        if level == 3 then
-                            endDialogue("Storyline #1", "Dialogue6")
-                            task.wait(0.1)
-                            endDialogue("Storyline #2", "Dialogue3")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 4 then
-                            endDialogue("Storyline #3", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Leaky Eye Luca")
-                            task.wait(0.1)
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 7 then
-                            endDialogue("Storyline #3", "Dialogue6")
-                            task.wait(0.1)
-                            farmWithStand("Bucciarati")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 10 then
-                            endDialogue("Storyline #4", "Dialogue3")
-                            endDialogue("Storyline #5", "Dialogue5")
-                            endDialogue("Storyline #6", "Dialogue5")
-                            endDialogue("Storyline #7", "Dialogue5")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 11 then
-                            endDialogue("Storyline #8", "Dialogue4")
-                            endDialogue("Storyline #9", "Dialogue7")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 12 then
-                            endDialogue("Storyline #10", "Dialogue6")
-                            endDialogue("Storyline #11", "Dialogue8")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 13 then
-                            task.wait(0.1)
-                            farmWithStand("Fugo")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 17 then
-                            endDialogue("Storyline #11", "Dialogue11")
-                            task.wait(0.1)
-                            farmWithStand("Pesci")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 20 then
-                            endDialogue("Storyline #12", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Ghiaccio")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 23 then
-                            endDialogue("Storyline #14", "Dialogue2")
-                            task.wait(0.1)
-                            farmWithStand("Diavolo")
-                            endDialogue("Storyline #14", "Dialogue7")
-                            resetCharacter()
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 27 and level < 30 then
-                            while active and getLevel() < 30 do
-                                endDialogue("William Zeppeli", "Dialogue4")
-                                if not active then break end
-                                farmWithStand("Vampire")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 30 and level < 35 then
-                            while active and getLevel() < 35 do
-                                endDialogue("Doppio", "Dialogue3")
-                                endDialogue("Doppio", "Dialogue5")
-                                if not active then break end
-                                farmWithStand("DIO")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 35 and level < 40 then
-                            while active and getLevel() < 40 do
-                                endDialogue("Dio", "Dialogue4")
-                                endDialogue("Dio", "Dialogue6")
-                                if not active then break end
-                                farmWithStand("Jotaro")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 40 then
-                            endDialogue("Prestige", "Dialogue2")
-                            wait(5)
-                            prestige = getPrestige()
-                            level = getLevel()
-                        end
-                    end
-                end
-                
-                if prestige == 2 then
-                    if level == 1 then
-                        endDialogue("Storyline #1", "Dialogue2")
-                        farmNPCs("Security Guard")
-                    end
-                    
-                    local stand = nil
-                    while not stand and active do
-                        stand = getGoodStand()
-                        task.wait(1)
-                    end
-                    
-                    if stand and not badStands[stand] then
-                        task.wait(1)
-                        level = getLevel()
-                        if level == 3 then
-                            endDialogue("Storyline #1", "Dialogue6")
-                            task.wait(0.1)
-                            endDialogue("Storyline #2", "Dialogue3")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 4 then
-                            endDialogue("Storyline #3", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Leaky Eye Luca")
-                            task.wait(0.1)
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 7 then
-                            endDialogue("Storyline #3", "Dialogue6")
-                            task.wait(0.1)
-                            farmWithStand("Bucciarati")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 11 then
-                            endDialogue("Storyline #4", "Dialogue3")
-                            endDialogue("Storyline #5", "Dialogue5")
-                            endDialogue("Storyline #6", "Dialogue5")
-                            endDialogue("Storyline #7", "Dialogue5")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 12 then
-                            endDialogue("Storyline #8", "Dialogue4")
-                            endDialogue("Storyline #9", "Dialogue7")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 12 then
-                            endDialogue("Storyline #10", "Dialogue6")
-                            endDialogue("Storyline #11", "Dialogue8")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 14 then
-                            task.wait(0.1)
-                            farmWithStand("Fugo")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 18 then
-                            endDialogue("Storyline #11", "Dialogue11")
-                            task.wait(0.1)
-                            farmWithStand("Pesci")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 22 then
-                            endDialogue("Storyline #12", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Ghiaccio")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 25 then
-                            endDialogue("Storyline #14", "Dialogue2")
-                            task.wait(0.1)
-                            farmWithStand("Diavolo")
-                            endDialogue("Storyline #14", "Dialogue7")
-                            resetCharacter()
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 29 and level < 30 then
-                            while active and getLevel() < 30 do
-                                endDialogue("William Zeppeli", "Dialogue4")
-                                if not active then break end
-                                farmWithStand("Vampire")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 30 and level < 35 then
-                            while active and getLevel() < 35 do
-                                endDialogue("Doppio", "Dialogue3")
-                                endDialogue("Doppio", "Dialogue5")
-                                if not active then break end
-                                farmWithStand("DIO")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 35 and level < 45 then
-                            while active and getLevel() < 45 do
-                                endDialogue("Dio", "Dialogue4")
-                                endDialogue("Dio", "Dialogue6")
-                                if not active then break end
-                                farmWithStand("Jotaro")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 45 then
-                            endDialogue("Prestige", "Dialogue2")
-                            wait(5)
-                            prestige = getPrestige()
-                            level = getLevel()
-                        end
-                    end
-                end
-                
-                if prestige == 3 then
-                    if level == 1 then
-                        endDialogue("Storyline #1", "Dialogue2")
-                        farmNPCs("Security Guard")
-                    end
-                    
-                    local stand = nil
-                    while not stand and active do
-                        stand = getGoodStand()
-                        task.wait(1)
-                    end
-                    
-                    if stand and not badStands[stand] then
-                        task.wait(1)
-                        level = getLevel()
-                        if level == 3 then
-                            endDialogue("Storyline #1", "Dialogue6")
-                            task.wait(0.1)
-                            endDialogue("Storyline #2", "Dialogue3")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 5 then
-                            endDialogue("Storyline #3", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Leaky Eye Luca")
-                            task.wait(0.1)
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 8 then
-                            endDialogue("Storyline #3", "Dialogue6")
-                            task.wait(0.1)
-                            farmWithStand("Bucciarati")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 11 then
-                            endDialogue("Storyline #4", "Dialogue3")
-                            endDialogue("Storyline #5", "Dialogue5")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 12 then
-                            endDialogue("Storyline #6", "Dialogue5")
-                            endDialogue("Storyline #7", "Dialogue5")
-                            endDialogue("Storyline #8", "Dialogue4")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 13 then
-                            endDialogue("Storyline #9", "Dialogue7")
-                            endDialogue("Storyline #10", "Dialogue6")
-                            endDialogue("Storyline #11", "Dialogue8")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 15 then
-                            task.wait(0.1)
-                            farmWithStand("Fugo")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 19 then
-                            endDialogue("Storyline #11", "Dialogue11")
-                            task.wait(0.1)
-                            farmWithStand("Pesci")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 23 then
-                            endDialogue("Storyline #12", "Dialogue3")
-                            task.wait(0.1)
-                            farmWithStand("Ghiaccio")
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 27 then
-                            endDialogue("Storyline #14", "Dialogue2")
-                            task.wait(0.1)
-                            farmWithStand("Diavolo")
-                            endDialogue("Storyline #14", "Dialogue7")
-                            resetCharacter()
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 30 and level < 35 then
-                            while active and getLevel() < 35 do
-                                endDialogue("Doppio", "Dialogue3")
-                                endDialogue("Doppio", "Dialogue5")
-                                if not active then break end
-                                farmWithStand("DIO")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level >= 35 and level < 50 then
-                            while active and getLevel() < 50 do
-                                endDialogue("Dio", "Dialogue4")
-                                endDialogue("Dio", "Dialogue6")
-                                if not active then break end
-                                farmWithStand("Jotaro")
-                                task.wait(0.5)
-                            end
-                            task.wait(1)
-                            level = getLevel()
-                        end
-                        
-                        if level == 50 then
-                            stopAll()
-                        end
-                    end
-                end
-            end)
-            
-            if not active then
-                break
-            end
-        end
-    end
-
+local function createGUI()
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "FarmGUI_Unified"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = CoreGui
 
     local mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.new(0, 380, 0, 480)
-    mainFrame.Position = UDim2.new(0.5, -190, 0.5, -240)
+    mainFrame.Size = UDim2.new(0, 380, 0, 580)
+    mainFrame.Position = UDim2.new(0.5, -190, 0.5, -290)
     mainFrame.BackgroundColor3 = Color3.fromRGB(18, 22, 28)
     mainFrame.BorderSizePixel = 0
     mainFrame.Active = true
     mainFrame.Draggable = true
+    mainFrame.ClipsDescendants = false
     mainFrame.Parent = screenGui
-
     TweenService:Create(mainFrame, TweenInfo.new(0.4), {BackgroundTransparency = 0}):Play()
 
     local Corner = Instance.new("UICorner")
@@ -1670,6 +1480,7 @@ local function loadMainScript()
     titleBar.BackgroundColor3 = Color3.fromRGB(25, 30, 38)
     titleBar.BorderSizePixel = 0
     titleBar.Parent = mainFrame
+    titleBar.ZIndex = 2
 
     local titleCorner = Instance.new("UICorner")
     titleCorner.CornerRadius = UDim.new(0, 12)
@@ -1685,6 +1496,7 @@ local function loadMainScript()
     title.TextSize = 16
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = titleBar
+    title.ZIndex = 3
 
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -1696,7 +1508,8 @@ local function loadMainScript()
     closeBtn.Font = Enum.Font.GothamBold
     closeBtn.AutoButtonColor = false
     closeBtn.Parent = titleBar
-
+    closeBtn.ZIndex = 3
+    
     local closeCorner = Instance.new("UICorner")
     closeCorner.CornerRadius = UDim.new(0, 8)
     closeCorner.Parent = closeBtn
@@ -1706,9 +1519,10 @@ local function loadMainScript()
     tabFrame.Position = UDim2.new(0, 10, 0, 45)
     tabFrame.BackgroundTransparency = 1
     tabFrame.Parent = mainFrame
+    tabFrame.ZIndex = 2
 
     local farmsTab = Instance.new("TextButton")
-    farmsTab.Size = UDim2.new(1/3 - 0.02, -5, 1, 0)
+    farmsTab.Size = UDim2.new(0.5, -5, 1, 0)
     farmsTab.Position = UDim2.new(0, 0, 0, 0)
     farmsTab.Text = "⚔ FARM"
     farmsTab.TextColor3 = Color3.fromRGB(180, 190, 210)
@@ -1717,29 +1531,15 @@ local function loadMainScript()
     farmsTab.TextSize = 14
     farmsTab.AutoButtonColor = false
     farmsTab.Parent = tabFrame
+    farmsTab.ZIndex = 3
     
     local farmsTabCorner = Instance.new("UICorner")
     farmsTabCorner.CornerRadius = UDim.new(0, 6)
     farmsTabCorner.Parent = farmsTab
 
-    local itemsTab = Instance.new("TextButton")
-    itemsTab.Size = UDim2.new(1/3 - 0.02, -5, 1, 0)
-    itemsTab.Position = UDim2.new(1/3, 0, 0, 0)
-    itemsTab.Text = "📦 ITEMS"
-    itemsTab.TextColor3 = Color3.fromRGB(180, 190, 210)
-    itemsTab.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
-    itemsTab.Font = Enum.Font.GothamBold
-    itemsTab.TextSize = 14
-    itemsTab.AutoButtonColor = false
-    itemsTab.Parent = tabFrame
-    
-    local itemsTabCorner = Instance.new("UICorner")
-    itemsTabCorner.CornerRadius = UDim.new(0, 6)
-    itemsTabCorner.Parent = itemsTab
-
     local visualsTab = Instance.new("TextButton")
-    visualsTab.Size = UDim2.new(1/3 - 0.02, -5, 1, 0)
-    visualsTab.Position = UDim2.new(2/3, 0, 0, 0)
+    visualsTab.Size = UDim2.new(0.5, -5, 1, 0)
+    visualsTab.Position = UDim2.new(0.5, 0, 0, 0)
     visualsTab.Text = "👁 VISUAL"
     visualsTab.TextColor3 = Color3.fromRGB(180, 190, 210)
     visualsTab.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
@@ -1747,6 +1547,7 @@ local function loadMainScript()
     visualsTab.TextSize = 14
     visualsTab.AutoButtonColor = false
     visualsTab.Parent = tabFrame
+    visualsTab.ZIndex = 3
     
     local visualsTabCorner = Instance.new("UICorner")
     visualsTabCorner.CornerRadius = UDim.new(0, 6)
@@ -1759,68 +1560,15 @@ local function loadMainScript()
     farmsContainer.BorderSizePixel = 0
     farmsContainer.ScrollBarThickness = 4
     farmsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    farmsContainer.CanvasSize = UDim2.new(0, 0, 0, 320)
+    farmsContainer.CanvasSize = UDim2.new(0, 0, 0, 620)
     farmsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
     farmsContainer.Parent = mainFrame
     farmsContainer.Visible = true
+    farmsContainer.ZIndex = 1
 
-    local itemsContainer = Instance.new("ScrollingFrame")
-    itemsContainer.Size = UDim2.new(1, -20, 1, -95)
-    itemsContainer.Position = UDim2.new(0, 10, 0, 90)
-    itemsContainer.BackgroundTransparency = 1
-    itemsContainer.BorderSizePixel = 0
-    itemsContainer.ScrollBarThickness = 4
-    itemsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    itemsContainer.CanvasSize = UDim2.new(0, 0, 0, 600)
-    itemsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    itemsContainer.Parent = mainFrame
-    itemsContainer.Visible = false
-
-    local visualsContainer = Instance.new("ScrollingFrame")
-    visualsContainer.Size = UDim2.new(1, -20, 1, -95)
-    visualsContainer.Position = UDim2.new(0, 10, 0, 90)
-    visualsContainer.BackgroundTransparency = 1
-    visualsContainer.BorderSizePixel = 0
-    visualsContainer.ScrollBarThickness = 4
-    visualsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    visualsContainer.CanvasSize = UDim2.new(0, 0, 0, 320)
-    visualsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    visualsContainer.Parent = mainFrame
-    visualsContainer.Visible = false
-
-    local function setActiveTab(active, ...)
-        for _, btn in pairs({farmsTab, itemsTab, visualsTab}) do
-            btn.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
-            btn.TextColor3 = Color3.fromRGB(180, 190, 210)
-        end
-        active.BackgroundColor3 = Color3.fromRGB(60, 160, 240)
-        active.TextColor3 = Color3.new(1, 1, 1)
-        
-        farmsContainer.Visible = false
-        itemsContainer.Visible = false
-        visualsContainer.Visible = false
-        (...).Visible = true
-    end
-
-    farmsTab.MouseButton1Click:Connect(function() setActiveTab(farmsTab, farmsContainer) end)
-    itemsTab.MouseButton1Click:Connect(function() setActiveTab(itemsTab, itemsContainer) end)
-    visualsTab.MouseButton1Click:Connect(function() setActiveTab(visualsTab, visualsContainer) end)
-
-    local farmStatus = Instance.new("TextLabel")
-    farmStatus.Size = UDim2.new(1, -10, 0, 20)
-    farmStatus.Position = UDim2.new(0, 5, 0, 5)
-    farmStatus.BackgroundTransparency = 1
-    farmStatus.Text = "Главный фарм: ВЫКЛ"
-    farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    farmStatus.Font = Enum.Font.GothamBold
-    farmStatus.TextSize = 13
-    farmStatus.TextXAlignment = Enum.TextXAlignment.Center
-    farmStatus.Parent = farmsContainer
-
-    local mainFarmBtn = Instance.new("TextButton")
-    mainFarmBtn.Name = "MainFarmBtn"
-    mainFarmBtn.Size = UDim2.new(1, -10, 0, 40)
-    mainFarmBtn.Position = UDim2.new(0, 5, 0, 30)
+    mainFarmBtn = Instance.new("TextButton")
+    mainFarmBtn.Size = UDim2.new(1, -10, 0, 38)
+    mainFarmBtn.Position = UDim2.new(0, 5, 0, 5)
     mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
     mainFarmBtn.TextColor3 = Color3.new(1, 1, 1)
@@ -1828,162 +1576,145 @@ local function loadMainScript()
     mainFarmBtn.TextSize = 14
     mainFarmBtn.AutoButtonColor = false
     mainFarmBtn.Parent = farmsContainer
+    mainFarmBtn.ZIndex = 2
     
     local mainFarmBtnCorner = Instance.new("UICorner")
     mainFarmBtnCorner.CornerRadius = UDim.new(0, 8)
     mainFarmBtnCorner.Parent = mainFarmBtn
     
-    mainFarmBtn.MouseEnter:Connect(function()
-        if active then
-            TweenService:Create(mainFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(70, 220, 70)}):Play()
-        else
-            TweenService:Create(mainFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 100, 100)}):Play()
-        end
-    end)
-    
-    mainFarmBtn.MouseLeave:Connect(function()
-        if active then
-            TweenService:Create(mainFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 200, 50)}):Play()
-        else
-            TweenService:Create(mainFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(80, 80, 80)}):Play()
-        end
-    end)
-    
     mainFarmBtn.MouseButton1Click:Connect(function()
-        if active then
-            stopAll()
+        if mainActive then
+            stopMainFarm()
             mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
             mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-            farmStatus.Text = "Главный фарм: ВЫКЛ"
-            farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
         else
-            active = true
+            mainActive = true
             stopRequested = false
-            farmThreadMain = task.spawn(function()
-                pcall(mainFarm)
-                stopAll()
+            refreshTrackers()
+            mainFarmThread = task.spawn(function()
+                pcall(mainFarmLoop)
+                stopMainFarm()
                 mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
                 mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-                farmStatus.Text = "Главный фарм: ВЫКЛ"
-                farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
             end)
             mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВКЛ"
             mainFarmBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
-            farmStatus.Text = "Главный фарм: ВКЛ"
-            farmStatus.TextColor3 = Color3.fromRGB(50, 200, 50)
         end
     end)
 
-    local itemFarmBtn = Instance.new("TextButton")
-    itemFarmBtn.Name = "ItemFarmBtn"
-    itemFarmBtn.Size = UDim2.new(1, -10, 0, 40)
-    itemFarmBtn.Position = UDim2.new(0, 5, 0, 75)
-    itemFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    itemFarmBtn.Text = "▶ ITEM FARM : ВЫКЛ"
-    itemFarmBtn.TextColor3 = Color3.new(1, 1, 1)
-    itemFarmBtn.Font = Enum.Font.GothamBold
-    itemFarmBtn.TextSize = 14
-    itemFarmBtn.AutoButtonColor = false
-    itemFarmBtn.Parent = farmsContainer
+    farmItemBtn = Instance.new("TextButton")
+    farmItemBtn.Size = UDim2.new(1, -10, 0, 38)
+    farmItemBtn.Position = UDim2.new(0, 5, 0, 45)
+    farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+    farmItemBtn.TextColor3 = Color3.new(1, 1, 1)
+    farmItemBtn.Font = Enum.Font.GothamBold
+    farmItemBtn.TextSize = 14
+    farmItemBtn.AutoButtonColor = false
+    farmItemBtn.Parent = farmsContainer
+    farmItemBtn.ZIndex = 2
     
     local itemFarmBtnCorner = Instance.new("UICorner")
     itemFarmBtnCorner.CornerRadius = UDim.new(0, 8)
-    itemFarmBtnCorner.Parent = itemFarmBtn
+    itemFarmBtnCorner.Parent = farmItemBtn
     
-    itemFarmBtn.MouseEnter:Connect(function()
+    farmItemBtn.MouseButton1Click:Connect(function()
         if isFarmingItems then
-            TweenService:Create(itemFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(70, 220, 70)}):Play()
-        else
-            TweenService:Create(itemFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 100, 100)}):Play()
-        end
-    end)
-    
-    itemFarmBtn.MouseLeave:Connect(function()
-        if isFarmingItems then
-            TweenService:Create(itemFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 200, 50)}):Play()
-        else
-            TweenService:Create(itemFarmBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(80, 80, 80)}):Play()
-        end
-    end)
-    
-    itemFarmBtn.MouseButton1Click:Connect(function()
-        if isFarmingItems then
-            isFarmingItems = false
-            if farmThread then
-                task.cancel(farmThread)
-                farmThread = nil
-            end
-            itemFarmBtn.Text = "▶ ITEM FARM : ВЫКЛ"
-            itemFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+            stopItemFarm()
         else
             if toggleItemFarm() then
-                itemFarmBtn.Text = "▶ ITEM FARM : ВКЛ"
-                itemFarmBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+                farmItemBtn.Text = "📦 ITEM FARM : ВКЛ"
+                farmItemBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
             end
         end
     end)
 
-    local itemsTitle = Instance.new("TextLabel")
-    itemsTitle.Size = UDim2.new(1, -10, 0, 25)
-    itemsTitle.Position = UDim2.new(0, 5, 0, 5)
-    itemsTitle.BackgroundTransparency = 1
-    itemsTitle.Text = "📦 Выбор предметов для фарма:"
-    itemsTitle.TextColor3 = Color3.fromRGB(190, 190, 210)
-    itemsTitle.Font = Enum.Font.GothamBold
-    itemsTitle.TextSize = 12
-    itemsTitle.TextXAlignment = Enum.TextXAlignment.Left
-    itemsTitle.Parent = itemsContainer
+    itemSelectorBtn = Instance.new("TextButton")
+    itemSelectorBtn.Size = UDim2.new(1, -10, 0, 32)
+    itemSelectorBtn.Position = UDim2.new(0, 5, 0, 85)
+    itemSelectorBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 55)
+    itemSelectorBtn.Text = "📋 Выбор предметов [▼]"
+    itemSelectorBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+    itemSelectorBtn.Font = Enum.Font.Gotham
+    itemSelectorBtn.TextSize = 12
+    itemSelectorBtn.TextXAlignment = Enum.TextXAlignment.Left
+    itemSelectorBtn.Parent = farmsContainer
+    itemSelectorBtn.ZIndex = 3
+    
+    local itemSelectorCorner = Instance.new("UICorner")
+    itemSelectorCorner.CornerRadius = UDim.new(0, 6)
+    itemSelectorCorner.Parent = itemSelectorBtn
+    
+    local itemSelectorArrow = Instance.new("TextLabel")
+    itemSelectorArrow.Size = UDim2.new(0, 30, 1, 0)
+    itemSelectorArrow.Position = UDim2.new(1, -35, 0, 0)
+    itemSelectorArrow.BackgroundTransparency = 1
+    itemSelectorArrow.Text = "▼"
+    itemSelectorArrow.TextColor3 = Color3.fromRGB(150, 150, 170)
+    itemSelectorArrow.Font = Enum.Font.Gotham
+    itemSelectorArrow.TextSize = 14
+    itemSelectorArrow.Parent = itemSelectorBtn
+    itemSelectorArrow.ZIndex = 4
+    
+    selectorCount = Instance.new("TextLabel")
+    selectorCount.Size = UDim2.new(0, 60, 1, 0)
+    selectorCount.Position = UDim2.new(1, -95, 0, 0)
+    selectorCount.BackgroundTransparency = 1
+    selectorCount.Text = "15/15"
+    selectorCount.TextColor3 = Color3.fromRGB(100, 200, 100)
+    selectorCount.Font = Enum.Font.Gotham
+    selectorCount.TextSize = 11
+    selectorCount.TextXAlignment = Enum.TextXAlignment.Right
+    selectorCount.Parent = itemSelectorBtn
+    selectorCount.ZIndex = 4
 
-    local checkboxContainer = Instance.new("Frame")
-    checkboxContainer.Size = UDim2.new(1, -10, 0, 520)
-    checkboxContainer.Position = UDim2.new(0, 5, 0, 35)
-    checkboxContainer.BackgroundColor3 = Color3.fromRGB(22, 28, 35)
-    checkboxContainer.BorderSizePixel = 0
-    checkboxContainer.Parent = itemsContainer
+    itemSelectorFrame = Instance.new("Frame")
+    itemSelectorFrame.Size = UDim2.new(1, -10, 0, 0)
+    itemSelectorFrame.Position = UDim2.new(0, 5, 0, 119)
+    itemSelectorFrame.BackgroundColor3 = Color3.fromRGB(22, 28, 35)
+    itemSelectorFrame.BorderSizePixel = 0
+    itemSelectorFrame.ClipsDescendants = true
+    itemSelectorFrame.Parent = farmsContainer
+    itemSelectorFrame.ZIndex = 10
+    
+    local itemSelectorFrameCorner = Instance.new("UICorner")
+    itemSelectorFrameCorner.CornerRadius = UDim.new(0, 6)
+    itemSelectorFrameCorner.Parent = itemSelectorFrame
 
-    local checkboxCorner = Instance.new("UICorner")
-    checkboxCorner.CornerRadius = UDim.new(0, 8)
-    checkboxCorner.Parent = checkboxContainer
+    local farmCheckboxScroll = Instance.new("ScrollingFrame")
+    farmCheckboxScroll.Size = UDim2.new(1, -8, 1, -8)
+    farmCheckboxScroll.Position = UDim2.new(0, 4, 0, 4)
+    farmCheckboxScroll.BackgroundTransparency = 1
+    farmCheckboxScroll.BorderSizePixel = 0
+    farmCheckboxScroll.ScrollBarThickness = 3
+    farmCheckboxScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
+    farmCheckboxScroll.CanvasSize = UDim2.new(0, 0, 0, #ALL_ITEMS * 28)
+    farmCheckboxScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    farmCheckboxScroll.Parent = itemSelectorFrame
+    farmCheckboxScroll.ZIndex = 11
 
-    local checkboxScroll = Instance.new("ScrollingFrame")
-    checkboxScroll.Size = UDim2.new(1, -8, 1, -8)
-    checkboxScroll.Position = UDim2.new(0, 4, 0, 4)
-    checkboxScroll.BackgroundTransparency = 1
-    checkboxScroll.BorderSizePixel = 0
-    checkboxScroll.ScrollBarThickness = 3
-    checkboxScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    checkboxScroll.CanvasSize = UDim2.new(0, 0, 0, #ALL_ITEMS * 30)
-    checkboxScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    checkboxScroll.Parent = checkboxContainer
+    local farmCheckboxLayout = Instance.new("UIListLayout")
+    farmCheckboxLayout.Padding = UDim.new(0, 2)
+    farmCheckboxLayout.Parent = farmCheckboxScroll
 
-    local checkboxLayout = Instance.new("UIListLayout")
-    checkboxLayout.Padding = UDim.new(0, 3)
-    checkboxLayout.Parent = checkboxScroll
+    local farmCheckboxItems = {}
 
-    local checkboxItems = {}
-    local countLabel = nil
-
-    local function updateCount()
-        if not countLabel then return end
+    local function updateSelectorCount()
         local count = 0
         for _, selected in pairs(selectedItems) do
             if selected then count = count + 1 end
         end
-        countLabel.Text = string.format("Выбрано: %d/%d", count, #ALL_ITEMS)
+        selectorCount.Text = count .. "/" .. #ALL_ITEMS
     end
 
-    local function updateItemCheckboxes()
-        for name, frame in pairs(checkboxItems) do
-            local cb = frame:FindFirstChild("Checkbox")
-            local label = frame:FindFirstChild("Label")
-            if cb and label then
-                local isSelected = selectedItems[name] or false
-                cb.BackgroundColor3 = isSelected and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(50, 50, 60)
-                cb.Text = isSelected and "✓" or ""
-                label.TextColor3 = isSelected and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 200, 200)
-            end
+    local function updateFarmCheckboxes()
+        for name, data in pairs(farmCheckboxItems) do
+            local isSelected = selectedItems[name] or false
+            data.cb.BackgroundColor3 = isSelected and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(50, 50, 60)
+            data.cb.Text = isSelected and "✓" or ""
+            data.label.TextColor3 = isSelected and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 200, 200)
         end
-        updateCount()
+        updateSelectorCount()
     end
 
     for i, itemName in ipairs(ALL_ITEMS) do
@@ -1991,14 +1722,14 @@ local function loadMainScript()
         frame.Size = UDim2.new(1, -4, 0, 26)
         frame.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
         frame.BorderSizePixel = 0
-        frame.Parent = checkboxScroll
+        frame.Parent = farmCheckboxScroll
+        frame.ZIndex = 12
         
         local frameCorner = Instance.new("UICorner")
         frameCorner.CornerRadius = UDim.new(0, 4)
         frameCorner.Parent = frame
         
         local cb = Instance.new("TextButton")
-        cb.Name = "Checkbox"
         cb.Size = UDim2.new(0, 20, 0, 20)
         cb.Position = UDim2.new(0, 6, 0.5, -10)
         cb.BackgroundColor3 = selectedItems[itemName] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(50, 50, 60)
@@ -2008,43 +1739,213 @@ local function loadMainScript()
         cb.Font = Enum.Font.GothamBold
         cb.TextSize = 14
         cb.Parent = frame
+        cb.ZIndex = 13
         
         local cbCorner = Instance.new("UICorner")
         cbCorner.CornerRadius = UDim.new(0, 4)
         cbCorner.Parent = cb
         
         local label = Instance.new("TextLabel")
-        label.Name = "Label"
         label.Size = UDim2.new(1, -32, 1, 0)
         label.Position = UDim2.new(0, 30, 0, 0)
         label.BackgroundTransparency = 1
         label.Text = itemName
         label.TextColor3 = selectedItems[itemName] and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 200, 200)
         label.Font = Enum.Font.Gotham
-        label.TextSize = 12
+        label.TextSize = 11
         label.TextXAlignment = Enum.TextXAlignment.Left
         label.Parent = frame
+        label.ZIndex = 12
         
         cb.MouseButton1Click:Connect(function()
             selectedItems[itemName] = not selectedItems[itemName]
-            updateItemCheckboxes()
+            updateFarmCheckboxes()
         end)
         
-        checkboxItems[itemName] = frame
+        farmCheckboxItems[itemName] = {frame = frame, cb = cb, label = label}
     end
 
-    countLabel = Instance.new("TextLabel")
-    countLabel.Size = UDim2.new(1, -10, 0, 20)
-    countLabel.Position = UDim2.new(0, 5, 0, 560)
-    countLabel.BackgroundTransparency = 1
-    countLabel.Text = "Выбрано: 14/14"
-    countLabel.TextColor3 = Color3.fromRGB(150, 150, 170)
-    countLabel.Font = Enum.Font.Gotham
-    countLabel.TextSize = 11
-    countLabel.TextXAlignment = Enum.TextXAlignment.Center
-    countLabel.Parent = itemsContainer
+    updateFarmCheckboxes()
 
-    updateItemCheckboxes()
+    local function toggleItemSelector()
+        itemSelectorOpen = not itemSelectorOpen
+        local targetSize = itemSelectorOpen and 180 or 0
+        itemSelectorArrow.Text = itemSelectorOpen and "▲" or "▼"
+        TweenService:Create(itemSelectorFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(1, -10, 0, targetSize)
+        }):Play()
+    end
+
+    itemSelectorBtn.MouseButton1Click:Connect(toggleItemSelector)
+
+    standFarmBtn = Instance.new("TextButton")
+    standFarmBtn.Size = UDim2.new(1, -10, 0, 38)
+    standFarmBtn.Position = UDim2.new(0, 5, 0, 119)
+    standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+    standFarmBtn.TextColor3 = Color3.new(1, 1, 1)
+    standFarmBtn.Font = Enum.Font.GothamBold
+    standFarmBtn.TextSize = 14
+    standFarmBtn.AutoButtonColor = false
+    standFarmBtn.Parent = farmsContainer
+    standFarmBtn.ZIndex = 2
+    
+    local standFarmBtnCorner = Instance.new("UICorner")
+    standFarmBtnCorner.CornerRadius = UDim.new(0, 8)
+    standFarmBtnCorner.Parent = standFarmBtn
+    
+    standFarmBtn.MouseButton1Click:Connect(function()
+        if not selectedTargetStand then return end
+        isStandFarming = not isStandFarming
+        if isStandFarming then
+            standFarmBtn.Text = "🎯 STAND FARM : ВКЛ (" .. selectedTargetStand .. ")"
+            standFarmBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            standFarmThread = task.spawn(startStandFarmLoop)
+        else
+            standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+            standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+            if standFarmThread then
+                task.cancel(standFarmThread)
+                standFarmThread = nil
+            end
+        end
+    end)
+
+    local standSelectLabel = Instance.new("TextLabel")
+    standSelectLabel.Size = UDim2.new(1, -10, 0, 18)
+    standSelectLabel.Position = UDim2.new(0, 5, 0, 159)
+    standSelectLabel.BackgroundTransparency = 1
+    standSelectLabel.Text = "Выберите стенд:"
+    standSelectLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
+    standSelectLabel.Font = Enum.Font.GothamBold
+    standSelectLabel.TextSize = 12
+    standSelectLabel.TextXAlignment = Enum.TextXAlignment.Left
+    standSelectLabel.Parent = farmsContainer
+    standSelectLabel.ZIndex = 2
+
+    local standDropdownBtn = Instance.new("TextButton")
+    standDropdownBtn.Size = UDim2.new(1, -10, 0, 30)
+    standDropdownBtn.Position = UDim2.new(0, 5, 0, 179)
+    standDropdownBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 55)
+    standDropdownBtn.Text = "🎯 Не выбран"
+    standDropdownBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    standDropdownBtn.Font = Enum.Font.Gotham
+    standDropdownBtn.TextSize = 12
+    standDropdownBtn.TextXAlignment = Enum.TextXAlignment.Left
+    standDropdownBtn.Parent = farmsContainer
+    standDropdownBtn.ZIndex = 2
+    
+    local standDropdownCorner = Instance.new("UICorner")
+    standDropdownCorner.CornerRadius = UDim.new(0, 6)
+    standDropdownCorner.Parent = standDropdownBtn
+    
+    local standDropdownArrow = Instance.new("TextLabel")
+    standDropdownArrow.Size = UDim2.new(0, 30, 1, 0)
+    standDropdownArrow.Position = UDim2.new(1, -35, 0, 0)
+    standDropdownArrow.BackgroundTransparency = 1
+    standDropdownArrow.Text = "▼"
+    standDropdownArrow.TextColor3 = Color3.fromRGB(150, 150, 170)
+    standDropdownArrow.Font = Enum.Font.Gotham
+    standDropdownArrow.TextSize = 14
+    standDropdownArrow.Parent = standDropdownBtn
+    standDropdownArrow.ZIndex = 3
+
+    local standDropdownList = Instance.new("ScrollingFrame")
+    standDropdownList.Size = UDim2.new(1, -10, 0, 150)
+    standDropdownList.Position = UDim2.new(0, 5, 0, 211)
+    standDropdownList.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
+    standDropdownList.BorderSizePixel = 0
+    standDropdownList.ScrollBarThickness = 3
+    standDropdownList.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
+    standDropdownList.CanvasSize = UDim2.new(0, 0, 0, #ALL_STANDS * 28)
+    standDropdownList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    standDropdownList.Visible = false
+    standDropdownList.Parent = farmsContainer
+    standDropdownList.ZIndex = 5
+    
+    local standDropdownListCorner = Instance.new("UICorner")
+    standDropdownListCorner.CornerRadius = UDim.new(0, 6)
+    standDropdownListCorner.Parent = standDropdownList
+    
+    local standDropdownLayout = Instance.new("UIListLayout")
+    standDropdownLayout.Padding = UDim.new(0, 2)
+    standDropdownLayout.Parent = standDropdownList
+    
+    local function updateStandDropdownText()
+        standDropdownBtn.Text = selectedTargetStand and ("🎯 " .. selectedTargetStand) or "🎯 Не выбран"
+    end
+    
+    for _, name in ipairs(ALL_STANDS) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -4, 0, 26)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 40, 50)
+        btn.Text = name
+        btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.Parent = standDropdownList
+        btn.ZIndex = 6
+        
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 4)
+        btnCorner.Parent = btn
+        
+        local indicator = Instance.new("Frame")
+        indicator.Size = UDim2.new(0, 12, 1, -6)
+        indicator.Position = UDim2.new(1, -16, 0, 3)
+        indicator.BackgroundColor3 = (selectedTargetStand == name) and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(40, 40, 50)
+        indicator.BorderSizePixel = 0
+        indicator.Parent = btn
+        indicator.ZIndex = 6
+        
+        local indicatorCorner = Instance.new("UICorner")
+        indicatorCorner.CornerRadius = UDim.new(0, 3)
+        indicatorCorner.Parent = indicator
+        
+        btn.MouseButton1Click:Connect(function()
+            if selectedTargetStand == name then
+                selectedTargetStand = nil
+                if isStandFarming then
+                    isStandFarming = false
+                    if standFarmThread then
+                        task.cancel(standFarmThread)
+                        standFarmThread = nil
+                    end
+                    standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                    standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+                end
+            else
+                selectedTargetStand = name
+                if isStandFarming then
+                    standFarmBtn.Text = "🎯 STAND FARM : ВКЛ (" .. selectedTargetStand .. ")"
+                end
+            end
+            updateStandDropdownText()
+            standDropdownList.Visible = false
+            standDropdownArrow.Text = "▼"
+        end)
+    end
+    
+    local standDropdownOpen = false
+    standDropdownBtn.MouseButton1Click:Connect(function()
+        standDropdownOpen = not standDropdownOpen
+        standDropdownList.Visible = standDropdownOpen
+        standDropdownArrow.Text = standDropdownOpen and "▲" or "▼"
+    end)
+
+    local visualsContainer = Instance.new("ScrollingFrame")
+    visualsContainer.Size = UDim2.new(1, -20, 1, -95)
+    visualsContainer.Position = UDim2.new(0, 10, 0, 90)
+    visualsContainer.BackgroundTransparency = 1
+    visualsContainer.BorderSizePixel = 0
+    visualsContainer.ScrollBarThickness = 4
+    visualsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
+    visualsContainer.CanvasSize = UDim2.new(0, 0, 0, 150)
+    visualsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    visualsContainer.Parent = mainFrame
+    visualsContainer.Visible = false
+    visualsContainer.ZIndex = 1
 
     local visualsTitle = Instance.new("TextLabel")
     visualsTitle.Size = UDim2.new(1, -10, 0, 25)
@@ -2056,9 +1957,9 @@ local function loadMainScript()
     visualsTitle.TextSize = 12
     visualsTitle.TextXAlignment = Enum.TextXAlignment.Left
     visualsTitle.Parent = visualsContainer
+    visualsTitle.ZIndex = 2
 
     local espBtn = Instance.new("TextButton")
-    espBtn.Name = "EspBtn"
     espBtn.Size = UDim2.new(1, -10, 0, 40)
     espBtn.Position = UDim2.new(0, 5, 0, 35)
     espBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
@@ -2068,75 +1969,73 @@ local function loadMainScript()
     espBtn.TextSize = 14
     espBtn.AutoButtonColor = false
     espBtn.Parent = visualsContainer
+    espBtn.ZIndex = 2
     
     local espBtnCorner = Instance.new("UICorner")
     espBtnCorner.CornerRadius = UDim.new(0, 8)
     espBtnCorner.Parent = espBtn
     
-    espBtn.MouseEnter:Connect(function()
-        if _G.ItemESP_Active then
-            TweenService:Create(espBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(70, 220, 70)}):Play()
-        else
-            TweenService:Create(espBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 100, 100)}):Play()
-        end
-    end)
-    
-    espBtn.MouseLeave:Connect(function()
-        if _G.ItemESP_Active then
-            TweenService:Create(espBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 200, 50)}):Play()
-        else
-            TweenService:Create(espBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(80, 80, 80)}):Play()
-        end
-    end)
-    
     espBtn.MouseButton1Click:Connect(function()
+        if _G.ItemESP_Active == nil then
+            _G.ItemESP_Active = false
+        end
+        
         if _G.ItemESP_Active then
-            if espInstance then
+            if espInstance and type(espInstance.Disable) == "function" then
                 espInstance:Disable()
                 espInstance = nil
+            else
+                _G.ItemESP_Active = false
+                local container = getItemContainer()
+                if container then
+                    for _, item in pairs(container:GetChildren()) do
+                        local esp = item:FindFirstChild("ItemESP")
+                        if esp then esp:Destroy() end
+                    end
+                end
+                espTracker = {}
             end
             espBtn.Text = "👁 ESP : ВЫКЛ"
             espBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
         else
             espInstance = CreateItemESP()
-            espBtn.Text = "👁 ESP : ВКЛ"
-            espBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
-        end
-    end)
-
-    local espCount = Instance.new("TextLabel")
-    espCount.Size = UDim2.new(1, -10, 0, 20)
-    espCount.Position = UDim2.new(0, 5, 0, 80)
-    espCount.BackgroundTransparency = 1
-    espCount.Text = "📦 Предметов в зоне: 0"
-    espCount.TextColor3 = Color3.fromRGB(170, 170, 190)
-    espCount.Font = Enum.Font.Gotham
-    espCount.TextSize = 11
-    espCount.TextXAlignment = Enum.TextXAlignment.Center
-    espCount.Parent = visualsContainer
-
-    setActiveTab(farmsTab, farmsContainer)
-
-    task.spawn(function()
-        while screenGui and screenGui.Parent do
-            task.wait(2)
-            if _G.ItemESP_Active then
-                local count = 0
-                for _, items in pairs(_G.ItemESP_Items) do
-                    count = count + #items
-                end
-                espCount.Text = "📦 Предметов в зоне: " .. count
+            if espInstance then
+                espBtn.Text = "👁 ESP : ВКЛ"
+                espBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            else
+                _G.ItemESP_Active = false
+                espBtn.Text = "👁 ESP : ОШИБКА"
+                espBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
             end
         end
     end)
 
+    local function setActiveTab(active, ...)
+        for _, btn in pairs({farmsTab, visualsTab}) do
+            btn.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
+            btn.TextColor3 = Color3.fromRGB(180, 190, 210)
+        end
+        active.BackgroundColor3 = Color3.fromRGB(60, 160, 240)
+        active.TextColor3 = Color3.new(1, 1, 1)
+        farmsContainer.Visible = false
+        visualsContainer.Visible = false
+        (...).Visible = true
+        standDropdownList.Visible = false
+        standDropdownOpen = false
+        standDropdownArrow.Text = "▼"
+    end
+
+    farmsTab.MouseButton1Click:Connect(function() setActiveTab(farmsTab, farmsContainer) end)
+    visualsTab.MouseButton1Click:Connect(function() setActiveTab(visualsTab, visualsContainer) end)
+
     closeBtn.MouseButton1Click:Connect(function()
-        stopAll()
-        if isFarmingItems then
-            isFarmingItems = false
-            if farmThread then
-                task.cancel(farmThread)
-                farmThread = nil
+        stopMainFarm()
+        stopItemFarm()
+        if isStandFarming then
+            isStandFarming = false
+            if standFarmThread then
+                task.cancel(standFarmThread)
+                standFarmThread = nil
             end
         end
         if espInstance then
@@ -2146,9 +2045,8 @@ local function loadMainScript()
         screenGui:Destroy()
     end)
 
-    player.CharacterAdded:Connect(function(newChar)
-        updateCharacterMain(newChar)
-        if active then
+    player.CharacterAdded:Connect(function()
+        if mainActive then
             stopAttack()
             task.wait(0.2)
             if standMode then
@@ -2221,14 +2119,6 @@ local btnCornerKey = Instance.new("UICorner")
 btnCornerKey.CornerRadius = UDim.new(0, 6)
 btnCornerKey.Parent = submitBtn
 
-submitBtn.MouseEnter:Connect(function()
-    TweenService:Create(submitBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(80, 180, 255)}):Play()
-end)
-
-submitBtn.MouseLeave:Connect(function()
-    TweenService:Create(submitBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(60, 160, 240)}):Play()
-end)
-
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, 0, 0, 25)
 statusLabel.Position = UDim2.new(0, 0, 0.8, 0)
@@ -2243,17 +2133,14 @@ local isVerifying = false
 
 submitBtn.MouseButton1Click:Connect(function()
     if isVerifying then return end
-    
     local inputKey = textBox.Text
     if inputKey == "" then
         statusLabel.Text = "Введите ключ!"
         return
     end
-
     isVerifying = true
     statusLabel.TextColor3 = Color3.fromRGB(255, 200, 80)
     statusLabel.Text = "Проверка ключа..."
-
     task.spawn(function()
         local success, response = pcall(function()
             return httpRequest({
@@ -2266,16 +2153,15 @@ submitBtn.MouseButton1Click:Connect(function()
                 })
             })
         end)
-
         if success and response and response.StatusCode == 200 then
             local dataSuccess, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
             if dataSuccess and data and data.success then
                 statusLabel.TextColor3 = Color3.fromRGB(80, 255, 80)
                 statusLabel.Text = "✅ Успешно! Загрузка скрипта..."
                 task.wait(1)
-                
                 keyGui:Destroy()
-                loadMainScript()
+                refreshTrackers()
+                createGUI()
             else
                 statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
                 statusLabel.Text = data and data.message or "Неверный ключ!"
