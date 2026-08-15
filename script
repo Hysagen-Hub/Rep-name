@@ -10,13 +10,23 @@ local httpRequest = (syn and syn.request) or request or http_request or (http an
 
 local WORKER_URL = "https://ybakeysystem.oleg-kotory-oleg.workers.dev"
 
-_G.ItemESP_Active = false
-
 local function getHWID()
     if gethwid then return gethwid() end
     if get_hwid then return get_hwid() end
     if getdeviceid then return getdeviceid() end
     return game:GetService("RbxAnalyticsService"):GetClientId()
+end
+
+local function getPing()
+    local stats = game:GetService("Stats")
+    local ping = stats.Network:GetAveragePing()
+    return ping * 1000
+end
+
+local function waitForPing()
+    local ping = getPing()
+    local waitTime = math.max(ping / 1000, 0.05)
+    task.wait(waitTime)
 end
 
 local function SetupDistanceBypass()
@@ -39,7 +49,7 @@ local ALL_ITEMS = {
     'Mysterious Arrow', 'Pure Rokakaka', 'Clackers', 'Rokakaka', 'Lucky Arrow',
     'Lucky Stone Mask', "Rib Cage of The Saint's Corpse", 'Steel Ball',
     "Zeppeli's Hat", 'Ancient Scroll', "Quinton's Glove", 'Stone Mask',
-    'Gold Coin', 'Diamond', "Dio's Diary", "Caesar's Headband"
+    'Gold Coin', 'Diamond', "Dio's Diary"
 }
 
 local ARROW_STANDS = {
@@ -72,6 +82,7 @@ local farmThread = nil
 local standFarmThread = nil
 local mainFarmThread = nil
 local espInstance = nil
+local playerEspInstance = nil
 local mainActive = false
 local stopRequested = false
 local attacking = false
@@ -80,10 +91,12 @@ local standMode = false
 local currentTarget = nil
 local heartbeatConn = nil
 
+_G.ItemESP_Active = false
+_G.PlayerESP_Active = false
+
 local farmItemBtn = nil
 local standFarmBtn = nil
 local mainFarmBtn = nil
-local farmStatus = nil
 local itemSelectorOpen = false
 local itemSelectorBtn = nil
 local itemSelectorFrame = nil
@@ -269,9 +282,13 @@ local function activateRemoteEvents(model, prompt)
             for i = 1, 3 do
                 pcall(function()
                     remote:FireServer()
+                    waitForPing()
                     remote:FireServer(model)
+                    waitForPing()
                     remote:FireServer(prompt)
+                    waitForPing()
                 end)
+                task.wait(0.05)
             end
         end
         return true
@@ -307,7 +324,7 @@ local function startItemFarmLoop()
                     isFarmingItems = false
                     if farmThread then task.cancel(farmThread) farmThread = nil end
                     if farmItemBtn then
-                        farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+                        farmItemBtn.Text = "Item farm : OFF"
                         farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
                     end
                     break
@@ -364,7 +381,7 @@ local function stopItemFarm()
     isFarmingItems = false
     if farmThread then task.cancel(farmThread) farmThread = nil end
     if farmItemBtn then
-        farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+        farmItemBtn.Text = "Item farm : OFF"
         farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     end
 end
@@ -497,7 +514,7 @@ local function startStandFarmLoop()
         if not selectedTargetStand then
             isStandFarming = false
             if standFarmBtn then
-                standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                standFarmBtn.Text = "Stand farm : OFF"
                 standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
             end
             break
@@ -513,7 +530,7 @@ local function startStandFarmLoop()
         if currentStand == selectedTargetStand then
             isStandFarming = false
             if standFarmBtn then
-                standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                standFarmBtn.Text = "Stand farm : OFF"
                 standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
             end
             if isFarmingItems then stopItemFarm() end
@@ -528,7 +545,7 @@ local function startStandFarmLoop()
                 if stats.Stand.Value == selectedTargetStand then
                     isStandFarming = false
                     if standFarmBtn then
-                        standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                        standFarmBtn.Text = "Stand farm : OFF"
                         standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
                     end
                     if isFarmingItems then stopItemFarm() end
@@ -555,7 +572,7 @@ local function startStandFarmLoop()
                     if stats.Stand.Value == selectedTargetStand then
                         isStandFarming = false
                         if standFarmBtn then
-                            standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                            standFarmBtn.Text = "Stand farm : OFF"
                             standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
                         end
                         if isFarmingItems then stopItemFarm() end
@@ -1352,8 +1369,194 @@ local function mainFarmLoop()
     end
 end
 
+-- Функция для ESP игроков
+local function CreatePlayerESP()
+    if _G.PlayerESP_Active then
+        return playerEspInstance
+    end
+    
+    _G.PlayerESP_Active = true
+    local espObjects = {}
+    
+    -- Создаём BillboardGui для имени
+    local espGui = Instance.new("BillboardGui")
+    espGui.Name = "PlayerESP"
+    espGui.AlwaysOnTop = true
+    espGui.Size = UDim2.new(0, 200, 0, 30)
+    espGui.StudsOffset = Vector3.new(0, 2.5, 0)
+    espGui.MaxDistance = math.huge -- Всегда видно
+    espGui.ResetOnSpawn = false
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.BackgroundTransparency = 1
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Всегда белый
+    textLabel.TextScaled = true
+    textLabel.TextStrokeTransparency = 0.2
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    textLabel.Text = ""
+    textLabel.Parent = espGui
+    
+    -- Создаём Highlight для тела
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "PlayerHighlight"
+    highlight.Adornee = nil
+    highlight.FillColor = Color3.fromRGB(255, 255, 255)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.OutlineTransparency = 0.3
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    
+    local function updatePlayerESP()
+        if not _G.PlayerESP_Active then return end
+        
+        local newEspObjects = {}
+        
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == player then continue end
+            
+            local char = plr.Character
+            if not char then continue end
+            
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then continue end
+            
+            -- Проверяем наличие ESP у персонажа
+            local existingESP = char:FindFirstChild("PlayerESP")
+            local existingHighlight = char:FindFirstChild("PlayerHighlight")
+            
+            if not existingESP then
+                local newESP = espGui:Clone()
+                newESP.Parent = char
+                local label = newESP:FindFirstChildOfClass("TextLabel")
+                if label then
+                    label.Text = plr.Name
+                    label.TextColor3 = Color3.fromRGB(255, 255, 255) -- Белый
+                end
+                existingESP = newESP
+            else
+                -- Обновляем имя, если оно изменилось
+                local label = existingESP:FindFirstChildOfClass("TextLabel")
+                if label then
+                    label.Text = plr.Name
+                    label.TextColor3 = Color3.fromRGB(255, 255, 255) -- Белый
+                end
+            end
+            
+            if not existingHighlight then
+                local newHighlight = highlight:Clone()
+                newHighlight.Parent = char
+                newHighlight.Adornee = char
+                existingHighlight = newHighlight
+            end
+            
+            newEspObjects[plr] = {esp = existingESP, highlight = existingHighlight}
+        end
+        
+        -- Удаляем ESP для игроков, которые вышли или умерли
+        for plr, data in pairs(espObjects) do
+            if not newEspObjects[plr] then
+                if data.esp and data.esp.Parent then
+                    data.esp:Destroy()
+                end
+                if data.highlight and data.highlight.Parent then
+                    data.highlight:Destroy()
+                end
+            end
+        end
+        
+        espObjects = newEspObjects
+    end
+    
+    -- Первое обновление
+    task.wait(0.5)
+    updatePlayerESP()
+    
+    local playerEspUpdateThread = task.spawn(function()
+        while _G.PlayerESP_Active do
+            task.wait(0.5)
+            updatePlayerESP()
+        end
+    end)
+    
+    -- Подписываемся на события добавления/удаления игроков
+    local function onPlayerAdded(plr)
+        if plr == player then return end
+        plr.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            updatePlayerESP()
+        end)
+        plr.CharacterRemoving:Connect(function()
+            if espObjects[plr] then
+                if espObjects[plr].esp and espObjects[plr].esp.Parent then
+                    espObjects[plr].esp:Destroy()
+                end
+                if espObjects[plr].highlight and espObjects[plr].highlight.Parent then
+                    espObjects[plr].highlight:Destroy()
+                end
+                espObjects[plr] = nil
+            end
+        end)
+    end
+    
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            plr.CharacterAdded:Connect(function()
+                task.wait(0.5)
+                updatePlayerESP()
+            end)
+            plr.CharacterRemoving:Connect(function()
+                if espObjects[plr] then
+                    if espObjects[plr].esp and espObjects[plr].esp.Parent then
+                        espObjects[plr].esp:Destroy()
+                    end
+                    if espObjects[plr].highlight and espObjects[plr].highlight.Parent then
+                        espObjects[plr].highlight:Destroy()
+                    end
+                    espObjects[plr] = nil
+                end
+            end)
+        end
+    end
+    
+    Players.PlayerAdded:Connect(onPlayerAdded)
+    Players.PlayerRemoving:Connect(function(plr)
+        if espObjects[plr] then
+            if espObjects[plr].esp and espObjects[plr].esp.Parent then
+                espObjects[plr].esp:Destroy()
+            end
+            if espObjects[plr].highlight and espObjects[plr].highlight.Parent then
+                espObjects[plr].highlight:Destroy()
+            end
+            espObjects[plr] = nil
+        end
+    end)
+    
+    playerEspInstance = {
+        Disable = function()
+            _G.PlayerESP_Active = false
+            if playerEspUpdateThread then
+                pcall(function() task.cancel(playerEspUpdateThread) end)
+                playerEspUpdateThread = nil
+            end
+            for _, data in pairs(espObjects) do
+                if data.esp and data.esp.Parent then
+                    data.esp:Destroy()
+                end
+                if data.highlight and data.highlight.Parent then
+                    data.highlight:Destroy()
+                end
+            end
+            espObjects = {}
+            playerEspInstance = nil
+        end
+    }
+    
+    return playerEspInstance
+end
+
 local function CreateItemESP()
-    -- Проверяем, активен ли ESP
     if _G.ItemESP_Active == nil then
         _G.ItemESP_Active = false
     end
@@ -1362,7 +1565,6 @@ local function CreateItemESP()
         return espInstance
     end
     
-    -- Устанавливаем флаг
     _G.ItemESP_Active = true
     espTracker = {}
     setupTracker(espTracker)
@@ -1419,7 +1621,6 @@ local function CreateItemESP()
         end
     end
     
-    -- Первое обновление
     updateESP()
     
     local espUpdateThread = task.spawn(function()
@@ -1451,6 +1652,7 @@ local function CreateItemESP()
     return espInstance
 end
 
+-- Создание GUI (изменённая функция createGUI)
 local function createGUI()
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "FarmGUI_Unified"
@@ -1493,7 +1695,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -45, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🎯 YBA Farm Controller"
+    title.Text = "YBA script by Hysagen"
     title.TextColor3 = Color3.fromRGB(220, 230, 255)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 16
@@ -1563,29 +1765,17 @@ local function createGUI()
     farmsContainer.BorderSizePixel = 0
     farmsContainer.ScrollBarThickness = 4
     farmsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    farmsContainer.CanvasSize = UDim2.new(0, 0, 0, 700)
+    farmsContainer.CanvasSize = UDim2.new(0, 0, 0, 650)
     farmsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
     farmsContainer.Parent = mainFrame
     farmsContainer.Visible = true
     farmsContainer.ZIndex = 1
 
-    farmStatus = Instance.new("TextLabel")
-    farmStatus.Size = UDim2.new(1, -10, 0, 20)
-    farmStatus.Position = UDim2.new(0, 5, 0, 5)
-    farmStatus.BackgroundTransparency = 1
-    farmStatus.Text = "Главный фарм: ВЫКЛ"
-    farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-    farmStatus.Font = Enum.Font.GothamBold
-    farmStatus.TextSize = 13
-    farmStatus.TextXAlignment = Enum.TextXAlignment.Center
-    farmStatus.Parent = farmsContainer
-    farmStatus.ZIndex = 2
-
     mainFarmBtn = Instance.new("TextButton")
     mainFarmBtn.Size = UDim2.new(1, -10, 0, 38)
-    mainFarmBtn.Position = UDim2.new(0, 5, 0, 28)
+    mainFarmBtn.Position = UDim2.new(0, 5, 0, 5)
     mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
+    mainFarmBtn.Text = "Prestige farm : OFF"
     mainFarmBtn.TextColor3 = Color3.new(1, 1, 1)
     mainFarmBtn.Font = Enum.Font.GothamBold
     mainFarmBtn.TextSize = 14
@@ -1600,10 +1790,8 @@ local function createGUI()
     mainFarmBtn.MouseButton1Click:Connect(function()
         if mainActive then
             stopMainFarm()
-            mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
+            mainFarmBtn.Text = "Prestige farm : OFF"
             mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-            farmStatus.Text = "Главный фарм: ВЫКЛ"
-            farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
         else
             mainActive = true
             stopRequested = false
@@ -1611,23 +1799,19 @@ local function createGUI()
             mainFarmThread = task.spawn(function()
                 pcall(mainFarmLoop)
                 stopMainFarm()
-                mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВЫКЛ"
+                mainFarmBtn.Text = "Prestige farm : OFF"
                 mainFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-                farmStatus.Text = "Главный фарм: ВЫКЛ"
-                farmStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
             end)
-            mainFarmBtn.Text = "▶ ГЛАВНЫЙ ФАРМ : ВКЛ"
+            mainFarmBtn.Text = "Prestige farm : ON"
             mainFarmBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
-            farmStatus.Text = "Главный фарм: ВКЛ"
-            farmStatus.TextColor3 = Color3.fromRGB(50, 200, 50)
         end
     end)
 
     farmItemBtn = Instance.new("TextButton")
     farmItemBtn.Size = UDim2.new(1, -10, 0, 38)
-    farmItemBtn.Position = UDim2.new(0, 5, 0, 68)
+    farmItemBtn.Position = UDim2.new(0, 5, 0, 45)
     farmItemBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    farmItemBtn.Text = "📦 ITEM FARM : ВЫКЛ"
+    farmItemBtn.Text = "Item farm : OFF"
     farmItemBtn.TextColor3 = Color3.new(1, 1, 1)
     farmItemBtn.Font = Enum.Font.GothamBold
     farmItemBtn.TextSize = 14
@@ -1644,7 +1828,7 @@ local function createGUI()
             stopItemFarm()
         else
             if toggleItemFarm() then
-                farmItemBtn.Text = "📦 ITEM FARM : ВКЛ"
+                farmItemBtn.Text = "Item farm : ON"
                 farmItemBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
             end
         end
@@ -1652,9 +1836,9 @@ local function createGUI()
 
     itemSelectorBtn = Instance.new("TextButton")
     itemSelectorBtn.Size = UDim2.new(1, -10, 0, 32)
-    itemSelectorBtn.Position = UDim2.new(0, 5, 0, 108)
+    itemSelectorBtn.Position = UDim2.new(0, 5, 0, 85)
     itemSelectorBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 55)
-    itemSelectorBtn.Text = "📋 Выбор предметов [▼]"
+    itemSelectorBtn.Text = "Choose items [▼]"
     itemSelectorBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
     itemSelectorBtn.Font = Enum.Font.Gotham
     itemSelectorBtn.TextSize = 12
@@ -1691,7 +1875,7 @@ local function createGUI()
 
     itemSelectorFrame = Instance.new("Frame")
     itemSelectorFrame.Size = UDim2.new(1, -10, 0, 0)
-    itemSelectorFrame.Position = UDim2.new(0, 5, 0, 142)
+    itemSelectorFrame.Position = UDim2.new(0, 5, 0, 119)
     itemSelectorFrame.BackgroundColor3 = Color3.fromRGB(22, 28, 35)
     itemSelectorFrame.BorderSizePixel = 0
     itemSelectorFrame.ClipsDescendants = true
@@ -1799,11 +1983,12 @@ local function createGUI()
 
     itemSelectorBtn.MouseButton1Click:Connect(toggleItemSelector)
 
+    -- ==== ИЗМЕНЁННАЯ ЧАСТЬ: кнопка farm стенда и плавный выбор стенда ====
     standFarmBtn = Instance.new("TextButton")
     standFarmBtn.Size = UDim2.new(1, -10, 0, 38)
-    standFarmBtn.Position = UDim2.new(0, 5, 0, 142)
+    standFarmBtn.Position = UDim2.new(0, 5, 0, 119)
     standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+    standFarmBtn.Text = "Stand farm : OFF"
     standFarmBtn.TextColor3 = Color3.new(1, 1, 1)
     standFarmBtn.Font = Enum.Font.GothamBold
     standFarmBtn.TextSize = 14
@@ -1819,11 +2004,11 @@ local function createGUI()
         if not selectedTargetStand then return end
         isStandFarming = not isStandFarming
         if isStandFarming then
-            standFarmBtn.Text = "🎯 STAND FARM : ВКЛ (" .. selectedTargetStand .. ")"
+            standFarmBtn.Text = "Stand farm : ON (" .. selectedTargetStand .. ")"
             standFarmBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
             standFarmThread = task.spawn(startStandFarmLoop)
         else
-            standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+            standFarmBtn.Text = "Stand farm : OFF"
             standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
             if standFarmThread then
                 task.cancel(standFarmThread)
@@ -1832,29 +2017,18 @@ local function createGUI()
         end
     end)
 
-    local standSelectLabel = Instance.new("TextLabel")
-    standSelectLabel.Size = UDim2.new(1, -10, 0, 18)
-    standSelectLabel.Position = UDim2.new(0, 5, 0, 182)
-    standSelectLabel.BackgroundTransparency = 1
-    standSelectLabel.Text = "Выберите стенд:"
-    standSelectLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
-    standSelectLabel.Font = Enum.Font.GothamBold
-    standSelectLabel.TextSize = 12
-    standSelectLabel.TextXAlignment = Enum.TextXAlignment.Left
-    standSelectLabel.Parent = farmsContainer
-    standSelectLabel.ZIndex = 2
-
+    -- Кнопка выбора стенда (как у предметов)
     local standDropdownBtn = Instance.new("TextButton")
-    standDropdownBtn.Size = UDim2.new(1, -10, 0, 30)
-    standDropdownBtn.Position = UDim2.new(0, 5, 0, 202)
+    standDropdownBtn.Size = UDim2.new(1, -10, 0, 32)
+    standDropdownBtn.Position = UDim2.new(0, 5, 0, 159)
     standDropdownBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 55)
-    standDropdownBtn.Text = "🎯 Не выбран"
-    standDropdownBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    standDropdownBtn.Text = "Choose stand [▼]"
+    standDropdownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
     standDropdownBtn.Font = Enum.Font.Gotham
     standDropdownBtn.TextSize = 12
     standDropdownBtn.TextXAlignment = Enum.TextXAlignment.Left
     standDropdownBtn.Parent = farmsContainer
-    standDropdownBtn.ZIndex = 2
+    standDropdownBtn.ZIndex = 3
     
     local standDropdownCorner = Instance.new("UICorner")
     standDropdownCorner.CornerRadius = UDim.new(0, 6)
@@ -1869,32 +2043,53 @@ local function createGUI()
     standDropdownArrow.Font = Enum.Font.Gotham
     standDropdownArrow.TextSize = 14
     standDropdownArrow.Parent = standDropdownBtn
-    standDropdownArrow.ZIndex = 3
+    standDropdownArrow.ZIndex = 4
 
-    local standDropdownList = Instance.new("ScrollingFrame")
-    standDropdownList.Size = UDim2.new(1, -10, 0, 150)
-    standDropdownList.Position = UDim2.new(0, 5, 0, 234)
-    standDropdownList.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
-    standDropdownList.BorderSizePixel = 0
-    standDropdownList.ScrollBarThickness = 3
-    standDropdownList.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    standDropdownList.CanvasSize = UDim2.new(0, 0, 0, #ALL_STANDS * 28)
-    standDropdownList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    standDropdownList.Visible = false
-    standDropdownList.Parent = farmsContainer
-    standDropdownList.ZIndex = 5
+    local standDropdownFrame = Instance.new("Frame")
+    standDropdownFrame.Size = UDim2.new(1, -10, 0, 0)
+    standDropdownFrame.Position = UDim2.new(0, 5, 0, 193)
+    standDropdownFrame.BackgroundColor3 = Color3.fromRGB(22, 28, 35)
+    standDropdownFrame.BorderSizePixel = 0
+    standDropdownFrame.ClipsDescendants = true
+    standDropdownFrame.Parent = farmsContainer
+    standDropdownFrame.ZIndex = 10
     
-    local standDropdownListCorner = Instance.new("UICorner")
-    standDropdownListCorner.CornerRadius = UDim.new(0, 6)
-    standDropdownListCorner.Parent = standDropdownList
-    
+    local standDropdownFrameCorner = Instance.new("UICorner")
+    standDropdownFrameCorner.CornerRadius = UDim.new(0, 6)
+    standDropdownFrameCorner.Parent = standDropdownFrame
+
+    local standDropdownScroll = Instance.new("ScrollingFrame")
+    standDropdownScroll.Size = UDim2.new(1, -8, 1, -8)
+    standDropdownScroll.Position = UDim2.new(0, 4, 0, 4)
+    standDropdownScroll.BackgroundTransparency = 1
+    standDropdownScroll.BorderSizePixel = 0
+    standDropdownScroll.ScrollBarThickness = 3
+    standDropdownScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
+    standDropdownScroll.CanvasSize = UDim2.new(0, 0, 0, #ALL_STANDS * 28)
+    standDropdownScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    standDropdownScroll.Parent = standDropdownFrame
+    standDropdownScroll.ZIndex = 11
+
     local standDropdownLayout = Instance.new("UIListLayout")
     standDropdownLayout.Padding = UDim.new(0, 2)
-    standDropdownLayout.Parent = standDropdownList
-    
+    standDropdownLayout.Parent = standDropdownScroll
+
     local function updateStandDropdownText()
-        standDropdownBtn.Text = selectedTargetStand and ("🎯 " .. selectedTargetStand) or "🎯 Не выбран"
+        standDropdownBtn.Text = selectedTargetStand and (selectedTargetStand .. " [▼]") or "Choose stand [▼]"
     end
+
+    local standDropdownOpen = false
+
+    local function toggleStandSelector()
+        standDropdownOpen = not standDropdownOpen
+        local targetSize = standDropdownOpen and 150 or 0
+        standDropdownArrow.Text = standDropdownOpen and "▲" or "▼"
+        TweenService:Create(standDropdownFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(1, -10, 0, targetSize)
+        }):Play()
+    end
+
+    standDropdownBtn.MouseButton1Click:Connect(toggleStandSelector)
     
     for _, name in ipairs(ALL_STANDS) do
         local btn = Instance.new("TextButton")
@@ -1905,8 +2100,8 @@ local function createGUI()
         btn.Font = Enum.Font.Gotham
         btn.TextSize = 11
         btn.TextXAlignment = Enum.TextXAlignment.Left
-        btn.Parent = standDropdownList
-        btn.ZIndex = 6
+        btn.Parent = standDropdownScroll
+        btn.ZIndex = 12
         
         local btnCorner = Instance.new("UICorner")
         btnCorner.CornerRadius = UDim.new(0, 4)
@@ -1918,7 +2113,7 @@ local function createGUI()
         indicator.BackgroundColor3 = (selectedTargetStand == name) and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(40, 40, 50)
         indicator.BorderSizePixel = 0
         indicator.Parent = btn
-        indicator.ZIndex = 6
+        indicator.ZIndex = 12
         
         local indicatorCorner = Instance.new("UICorner")
         indicatorCorner.CornerRadius = UDim.new(0, 3)
@@ -1933,27 +2128,30 @@ local function createGUI()
                         task.cancel(standFarmThread)
                         standFarmThread = nil
                     end
-                    standFarmBtn.Text = "🎯 STAND FARM : ВЫКЛ"
+                    standFarmBtn.Text = "Stand farm : OFF"
                     standFarmBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
                 end
             else
                 selectedTargetStand = name
                 if isStandFarming then
-                    standFarmBtn.Text = "🎯 STAND FARM : ВКЛ (" .. selectedTargetStand .. ")"
+                    standFarmBtn.Text = "Stand farm : ON (" .. selectedTargetStand .. ")"
+                end
+                -- Обновляем индикаторы
+                for _, child in ipairs(standDropdownScroll:GetChildren()) do
+                    if child:IsA("TextButton") and child:FindFirstChild("Frame") then
+                        child.Frame.BackgroundColor3 = (child.Text == name) and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(40, 40, 50)
+                    end
                 end
             end
             updateStandDropdownText()
-            standDropdownList.Visible = false
-            standDropdownArrow.Text = "▼"
+            if standDropdownOpen then
+                toggleStandSelector()
+            end
         end)
     end
-    
-    local standDropdownOpen = false
-    standDropdownBtn.MouseButton1Click:Connect(function()
-        standDropdownOpen = not standDropdownOpen
-        standDropdownList.Visible = standDropdownOpen
-        standDropdownArrow.Text = standDropdownOpen and "▲" or "▼"
-    end)
+
+    updateStandDropdownText()
+    -- ==== КОНЕЦ ИЗМЕНЁННОЙ ЧАСТИ ====
 
     local visualsContainer = Instance.new("ScrollingFrame")
     visualsContainer.Size = UDim2.new(1, -20, 1, -95)
@@ -1962,29 +2160,18 @@ local function createGUI()
     visualsContainer.BorderSizePixel = 0
     visualsContainer.ScrollBarThickness = 4
     visualsContainer.ScrollBarImageColor3 = Color3.fromRGB(60, 160, 240)
-    visualsContainer.CanvasSize = UDim2.new(0, 0, 0, 320)
+    visualsContainer.CanvasSize = UDim2.new(0, 0, 0, 200)
     visualsContainer.AutomaticCanvasSize = Enum.AutomaticSize.Y
     visualsContainer.Parent = mainFrame
     visualsContainer.Visible = false
     visualsContainer.ZIndex = 1
 
-    local visualsTitle = Instance.new("TextLabel")
-    visualsTitle.Size = UDim2.new(1, -10, 0, 25)
-    visualsTitle.Position = UDim2.new(0, 5, 0, 5)
-    visualsTitle.BackgroundTransparency = 1
-    visualsTitle.Text = "👁 Настройки визуализации"
-    visualsTitle.TextColor3 = Color3.fromRGB(190, 190, 210)
-    visualsTitle.Font = Enum.Font.GothamBold
-    visualsTitle.TextSize = 12
-    visualsTitle.TextXAlignment = Enum.TextXAlignment.Left
-    visualsTitle.Parent = visualsContainer
-    visualsTitle.ZIndex = 2
-
+    -- Кнопки на странице VISUAL смещены вниз (начинаются с 10)
     local espBtn = Instance.new("TextButton")
     espBtn.Size = UDim2.new(1, -10, 0, 40)
-    espBtn.Position = UDim2.new(0, 5, 0, 35)
+    espBtn.Position = UDim2.new(0, 5, 0, 10)
     espBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    espBtn.Text = "👁 ESP : ВЫКЛ"
+    espBtn.Text = "Esp items : OFF"
     espBtn.TextColor3 = Color3.new(1, 1, 1)
     espBtn.Font = Enum.Font.GothamBold
     espBtn.TextSize = 14
@@ -1997,18 +2184,15 @@ local function createGUI()
     espBtnCorner.Parent = espBtn
     
     espBtn.MouseButton1Click:Connect(function()
-        -- Инициализируем переменную если её нет
         if _G.ItemESP_Active == nil then
             _G.ItemESP_Active = false
         end
         
         if _G.ItemESP_Active then
-            -- Выключаем ESP
-            if espInstance then
+            if espInstance and type(espInstance.Disable) == "function" then
                 espInstance:Disable()
                 espInstance = nil
             else
-                -- Если espInstance нет, принудительно очищаем
                 _G.ItemESP_Active = false
                 local container = getItemContainer()
                 if container then
@@ -2019,33 +2203,69 @@ local function createGUI()
                 end
                 espTracker = {}
             end
-            espBtn.Text = "👁 ESP : ВЫКЛ"
+            espBtn.Text = "Esp items : OFF"
             espBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
         else
-            -- Включаем ESP
             espInstance = CreateItemESP()
             if espInstance then
-                espBtn.Text = "👁 ESP : ВКЛ"
+                espBtn.Text = "Esp items : ON"
                 espBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
             else
                 _G.ItemESP_Active = false
-                espBtn.Text = "👁 ESP : ОШИБКА"
+                espBtn.Text = "Esp items : ERR"
                 espBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
             end
         end
     end)
 
-    local espCount = Instance.new("TextLabel")
-    espCount.Size = UDim2.new(1, -10, 0, 20)
-    espCount.Position = UDim2.new(0, 5, 0, 80)
-    espCount.BackgroundTransparency = 1
-    espCount.Text = "📦 Предметов в зоне: 0"
-    espCount.TextColor3 = Color3.fromRGB(170, 170, 190)
-    espCount.Font = Enum.Font.Gotham
-    espCount.TextSize = 11
-    espCount.TextXAlignment = Enum.TextXAlignment.Center
-    espCount.Parent = visualsContainer
-    espCount.ZIndex = 2
+    local playerEspBtn = Instance.new("TextButton")
+    playerEspBtn.Size = UDim2.new(1, -10, 0, 40)
+    playerEspBtn.Position = UDim2.new(0, 5, 0, 55)
+    playerEspBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    playerEspBtn.Text = "Esp players : OFF"
+    playerEspBtn.TextColor3 = Color3.new(1, 1, 1)
+    playerEspBtn.Font = Enum.Font.GothamBold
+    playerEspBtn.TextSize = 14
+    playerEspBtn.AutoButtonColor = false
+    playerEspBtn.Parent = visualsContainer
+    playerEspBtn.ZIndex = 2
+    
+    local playerEspBtnCorner = Instance.new("UICorner")
+    playerEspBtnCorner.CornerRadius = UDim.new(0, 8)
+    playerEspBtnCorner.Parent = playerEspBtn
+    
+    playerEspBtn.MouseButton1Click:Connect(function()
+        if _G.PlayerESP_Active == nil then
+            _G.PlayerESP_Active = false
+        end
+        
+        if _G.PlayerESP_Active then
+            if playerEspInstance and type(playerEspInstance.Disable) == "function" then
+                playerEspInstance:Disable()
+                playerEspInstance = nil
+            else
+                _G.PlayerESP_Active = false
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= player and plr.Character then
+                        local esp = plr.Character:FindFirstChild("PlayerESP")
+                        if esp then esp:Destroy() end
+                    end
+                end
+            end
+            playerEspBtn.Text = "Esp players : OFF"
+            playerEspBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        else
+            playerEspInstance = CreatePlayerESP()
+            if playerEspInstance then
+                playerEspBtn.Text = "Esp players : ON"
+                playerEspBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            else
+                _G.PlayerESP_Active = false
+                playerEspBtn.Text = "Esp players : ERR"
+                playerEspBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            end
+        end
+    end)
 
     local function setActiveTab(active, ...)
         for _, btn in pairs({farmsTab, visualsTab}) do
@@ -2057,26 +2277,25 @@ local function createGUI()
         farmsContainer.Visible = false
         visualsContainer.Visible = false
         (...).Visible = true
-        standDropdownList.Visible = false
-        standDropdownOpen = false
-        standDropdownArrow.Text = "▼"
+        -- Закрываем открытые выпадающие списки при переключении вкладок
+        if standDropdownOpen then
+            standDropdownOpen = false
+            standDropdownArrow.Text = "▼"
+            TweenService:Create(standDropdownFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+                Size = UDim2.new(1, -10, 0, 0)
+            }):Play()
+        end
+        if itemSelectorOpen then
+            itemSelectorOpen = false
+            itemSelectorArrow.Text = "▼"
+            TweenService:Create(itemSelectorFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+                Size = UDim2.new(1, -10, 0, 0)
+            }):Play()
+        end
     end
 
     farmsTab.MouseButton1Click:Connect(function() setActiveTab(farmsTab, farmsContainer) end)
     visualsTab.MouseButton1Click:Connect(function() setActiveTab(visualsTab, visualsContainer) end)
-
-    task.spawn(function()
-        while screenGui and screenGui.Parent do
-            task.wait(2)
-            if _G.ItemESP_Active then
-                local count = 0
-                for _, items in pairs(espTracker) do
-                    count = count + #items
-                end
-                espCount.Text = "📦 Предметов в зоне: " .. count
-            end
-        end
-    end)
 
     closeBtn.MouseButton1Click:Connect(function()
         stopMainFarm()
@@ -2091,6 +2310,10 @@ local function createGUI()
         if espInstance then
             espInstance:Disable()
             espInstance = nil
+        end
+        if playerEspInstance then
+            playerEspInstance:Disable()
+            playerEspInstance = nil
         end
         screenGui:Destroy()
     end)
@@ -2143,7 +2366,7 @@ textBox.Size = UDim2.new(0.8, 0, 0, 38)
 textBox.Position = UDim2.new(0.1, 0, 0.28, 0)
 textBox.BackgroundColor3 = Color3.fromRGB(30, 35, 42)
 textBox.Text = ""
-textBox.PlaceholderText = "Введите ключ..."
+textBox.PlaceholderText = "enter the key..."
 textBox.PlaceholderColor3 = Color3.fromRGB(150, 150, 170)
 textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
 textBox.Font = Enum.Font.Gotham
@@ -2158,7 +2381,7 @@ local submitBtn = Instance.new("TextButton")
 submitBtn.Size = UDim2.new(0.8, 0, 0, 38)
 submitBtn.Position = UDim2.new(0.1, 0, 0.55, 0)
 submitBtn.BackgroundColor3 = Color3.fromRGB(60, 160, 240)
-submitBtn.Text = "Проверить"
+submitBtn.Text = "check"
 submitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 submitBtn.Font = Enum.Font.GothamBold
 submitBtn.TextSize = 14
@@ -2185,12 +2408,12 @@ submitBtn.MouseButton1Click:Connect(function()
     if isVerifying then return end
     local inputKey = textBox.Text
     if inputKey == "" then
-        statusLabel.Text = "Введите ключ!"
+        statusLabel.Text = "enter the key!"
         return
     end
     isVerifying = true
     statusLabel.TextColor3 = Color3.fromRGB(255, 200, 80)
-    statusLabel.Text = "Проверка ключа..."
+    statusLabel.Text = "checking key..."
     task.spawn(function()
         local success, response = pcall(function()
             return httpRequest({
@@ -2207,19 +2430,19 @@ submitBtn.MouseButton1Click:Connect(function()
             local dataSuccess, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
             if dataSuccess and data and data.success then
                 statusLabel.TextColor3 = Color3.fromRGB(80, 255, 80)
-                statusLabel.Text = "✅ Успешно! Загрузка скрипта..."
+                statusLabel.Text = "✅ success! loading script..."
                 task.wait(1)
                 keyGui:Destroy()
                 refreshTrackers()
                 createGUI()
             else
                 statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-                statusLabel.Text = data and data.message or "Неверный ключ!"
+                statusLabel.Text = data and data.message or "incorrect key!"
                 isVerifying = false
             end
         else
             statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-            statusLabel.Text = "Ошибка сети/сервера"
+            statusLabel.Text = "server error"
             isVerifying = false
         end
     end)
